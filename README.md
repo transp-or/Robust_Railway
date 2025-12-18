@@ -7,6 +7,10 @@
 This repository provides a framework for **railway timetable rescheduling** under disruptions.
 It integrates exact and heuristic optimization methods to generate feasible, high-quality rescheduling plans, aiming to minimize passenger inconvenience, deviations from the reference timetable, and operational costs.
 
+**This project is integrated with the industrial tool Viriato through the SMA algorithmic platform. Infrastructure data, planned train schedules, conflicts, and disruption scenarios are extracted from Viriato. The tool also takes as input passenger demand data in the form of an origin–destination matrix. The optimization module generates one or several disposition timetables, which can then be sent back to Viriato for visualization and further validation.**
+
+Integration with the SMA algorithmic platform is achieved via the open source Python client: [openviriato.algorithm-platform.py-client](https://github.com/sma-software/openviriato.algorithm-platform.py-client.git).
+
 ---
 
 ## 🚄 Overview
@@ -69,11 +73,12 @@ You can launch the main program directly from the command line:
 python ../Robust_Railway/main.py [OPTIONS]
 ```
 
+
 ### Available command-line arguments
 
 | Argument | Description |
 |-----------|--------------|
-| `--api_url` | (Required) API URL to connect with **Viriato**. |
+| `--api_url` | (Required) API URL to connect with **Viriato** (SMA platform). |
 | `--heuristic` | Enable solving the problem **heuristically** *(boolean flag)*. |
 | `--initial_timetable_and_graph_ID` | Job ID of the initial timetable and event–activity graph to load. |
 | `--write_back_viriato` | Enable writing back the results to **Viriato**. |
