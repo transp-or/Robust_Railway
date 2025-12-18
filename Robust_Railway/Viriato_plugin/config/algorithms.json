@@ -1,0 +1,392 @@
+﻿{
+  "algorithms": [
+    {
+      "name": "Various Parameters Test Algorithm",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false,
+      "parameterDescriptions": [
+         {
+          "key": "stringParameterMandatory",
+          "label": "String Parameter (mandatory)",
+          "type": "String",
+          "mandatory": true,
+          "advanced": false,
+          "default": "a default value for mandatory parameter",
+          "tooltip": "A mandatory string parameter that can be queried."
+         },
+         {
+          "key": "stringParameterOptional",
+          "label": "String Parameter (optional)",
+          "type": "String",
+          "tooltip": "An optional string parameter that can be queried.",
+          "mandatory": false
+        },
+        {
+          "key": "integerParameterMandatory",
+          "label": "Integer Parameter (mandatory)",
+          "mandatory": true,
+          "advanced": false,
+          "default": 42,
+          "type": "Integer",
+          "tooltip": "A mandatory integer parameter"
+        },
+        {
+          "key": "integerParameterOptional",
+          "type": "Integer",
+          "label": "Integer Parameter (optional)",
+          "tooltip": "An optional integer parameter",
+          "mandatory": false,
+          "advanced": false
+        },
+        {
+          "key": "floatingPointParameterMandatory",
+          "label": "Floating Point Parameter (mandatory)",
+          "tooltip": "A mandatory floating point number with max. 6 number of digits after the decimal point.",
+          "type": "FloatingPoint",
+          "mandatory": true,
+          "default": 42,
+          "advanced": false,
+          "configuration": {
+            "decimalPlaces": 6
+          }
+        },
+        {
+          "key": "floatingPointParameterOptional",
+          "label": "Floating Point Parameter (optional)",
+          "type": "FloatingPoint",
+          "tooltip": "An optional floating point number with max. 3 number of digits after the decimal point.",
+          "mandatory": false,
+          "advanced": false,
+          "default": null,
+          "configuration": {
+            "decimalPlaces": 3
+          }
+        },
+        {
+          "key": "booleanParameter",
+          "label": "A boolean parameter",
+          "type": "Boolean",
+          "advanced": false,
+          "default": false
+        },
+        {
+          "key": "timeWindowParameterMandatory",
+          "label": "Time Window Parameter Mandatory",
+          "type": "TimeWindow",
+          "advanced": false,
+          "mandatory": true,
+          "tooltip": "A timewindow parameter."
+        },
+        {
+          "key": "timeWindowParameterOptional",
+          "label": "Time Window Parameter Optional",
+          "type": "TimeWindow",
+          "advanced": false,
+          "mandatory": false,
+          "tooltip": "A timewindow parameter."
+        },
+        {
+          "key": "fileToOpenParameterMandatory",
+          "label": "Choose a file to open (mandatory)",
+          "type": "FileToOpen",
+          "tooltip": "Choose a file to open. The selection is mandatory.",
+          "mandatory": true,
+          "advanced": false,
+          "configuration": {
+            "filters": [
+              {
+                "name": "Text File",
+                "suffix": "txt"
+              },
+              {
+                "name": "Coma-seprated Values",
+                "suffix": "csv"
+              },
+              {
+                "name": "All Files",
+                "suffix": "*"
+              }
+            ]
+          }
+        },
+        {
+          "key": "fileToOpenParameterOptional",
+          "label": "Choose a file to open (optional)",
+          "tooltip": "Choose a file to open. The selection is optional.",
+          "type": "FileToOpen",
+          "mandatory": false,
+          "advanced": false,
+          "configuration": {
+            "filters": [
+              {
+                "name": "Text File",
+                "suffix": "txt"
+              }
+            ]
+          }
+        },
+        {
+          "key": "fileToSaveParameterMandatory",
+          "label": "Choose a file to save (mandatory)",
+          "type": "FileToSave",
+          "tooltip": "Choose a file to save. The selection is mandatory.",
+          "mandatory": true,
+          "configuration": {
+            "filters": [
+              {
+                "name": "Text File",
+                "suffix": "txt"
+              },
+              {
+                "name": "Coma-seprated Values",
+                "suffix": "csv"
+              },
+              {
+                "name": "All Files",
+                "suffix": "*"
+              }
+            ]
+          }
+        },
+        {
+          "key": "fileToSaveParameterOptional",
+          "label": "Choose a file to save (optional)",
+          "type": "FileToSave",
+          "tooltip": "Choose a file to save. The selection is optional.",
+          "mandatory": false,
+          "configuration": {
+            "filters": [
+              {
+                "name": "Text File",
+                "suffix": "txt"
+              }
+            ]
+          }
+        },
+        {
+          "key": "enumParameterMandatory",
+          "label": "Choose an enum option (mandatory)",
+          "type": "Enum",
+          "tooltip": "Choose an enum option. The selection is mandatory.",
+          "mandatory": true,
+          "default": "optionValue2",
+          "advanced": false,
+          "configuration": {
+            "choices": [
+              {
+                "enumValue": "optionValue1",
+                "label": "Option 1",
+                "tooltip": "The user chooses option 1 for the algorithm"
+              },
+              {
+                "enumValue": "optionValue2",
+                "label": "Option 2",
+                "tooltip": "The user chooses option 2 for the algorithm"
+              },
+              {
+                "enumValue": "optionValue3",
+                "label": "Option 3",
+                "tooltip": "The user chooses option 3 for the algorithm"
+              },
+              {
+                "enumValue": "optionValue4",
+                "label": "Option 4",
+                "tooltip": "The user chooses option 4 for the algorithm"
+              }
+            ]
+          }
+        },
+        {
+          "key": "enumParameterOptional",
+          "label": "Choose an enum option (optional)",
+          "tooltip": "Choose an enum option. The selection is optional.",
+          "type": "Enum",
+          "mandatory": false,
+          "default": null,
+          "advanced": false,
+          "configuration": {
+          "choices":[
+              {
+                "enumValue": "optionValue1",
+                "label": "Option 1",
+                "tooltip": "The user chooses option 1 for the algorithm"
+              },
+              {
+                "enumValue": "optionValue2",
+                "label": "Option 2",
+                "tooltip": "The user chooses option 2 for the algorithm"
+              },
+              {
+                "enumValue": "optionValue3",
+                "label": "Option 3",
+                "tooltip": "The user chooses option 3 for the algorithm"
+              },
+              {
+                "enumValue": "optionValue4",
+                "label": "Option 4",
+                "tooltip": "The user chooses option 4 for the algorithm"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Train parameters Test Algorithm",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false,
+      "parameterDescriptions": [
+        {
+          "key": "templateTrainMandatory",
+          "label": "Template Train (mandatory)",
+          "tooltip": "A train not necessarily from the reference scenario",
+          "advanced": false,
+          "type": "TemplateTrain"
+        },
+        {
+          "key": "templateTrainOptional",
+          "label": "Template Train (optional)",
+          "tooltip": "A train not necessarily from the reference scenario",
+          "advanced": false,
+          "mandatory": false,
+          "type": "TemplateTrain"
+        },
+        {
+          "key": "timetableTrainMandatory",
+          "label": "Timetable Train (mandatory)",
+          "tooltip": "A train from the reference scenario.",
+          "advanced": false,
+          "type": "TimetableTrain"
+        },
+        {
+          "key": "timetableTrainOptional",
+          "label": "Timetable Train (optional)",
+          "tooltip": "A train from the reference scenario.",
+          "advanced": false,
+          "mandatory": false,
+          "type": "TimetableTrain"
+        }
+      ]
+    },
+    {
+      "name": "Trains from scenario parameter Test Algorithm",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false,
+      "parameterDescriptions": [
+        {
+          "key": "templateTrainsFromScenarioMandatory",
+          "label": "Template Trains From Scenario (mandatory)",
+          "tooltip": "All active trains from the referenced scenario at the specified date",
+          "advanced": false,
+          "type": "TemplateTrainsFromScenario"
+        },
+        {
+          "key": "templateTrainsFromScenarioOptional",
+          "label": "Template Trains From Scenario (optional)",
+          "tooltip": "All active trains from the referenced scenario at the specified date",
+          "advanced": false,
+          "mandatory": false,
+          "type": "TemplateTrainsFromScenario"
+        }
+      ]
+    },
+    {
+      "name": "Classifier Fixed Size Test Algorithm",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false,
+      "parameterDescriptions": [
+        {
+          "key": "train",
+          "label": "Train",
+          "type": "TemplateTrain",
+          "advanced": false,
+          "tooltip": "A train which can be queried."
+        }
+      ],
+      "classifierSelector": {
+        "classifierType": "fixedClassifications",
+        "defaultClassificationDescription": "<default>",
+        "classificationDescriptions": [ "class_A", "class_B", "class_C" ]
+      }
+    },
+    {
+      "name": "Classifier Variable Size Test Algorithm",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false,
+      "parameterDescriptions": [
+        {
+          "key": "train",
+          "label": "Train",
+          "type": "TemplateTrain",
+          "tooltip": "A train which can be queried.",
+          "advanced": false
+        }
+      ],
+      "classifierSelector": {
+        "classifierType": "variableClassifications",
+        "defaultClassificationDescription": "<default>"
+      }
+    },
+    {
+      "name": "Running Time Calculator Required Test Algorithm",
+      "requiredFeatures": [ "RunningTimeCalculator" ],
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false
+    },
+    {
+      "name": "Works Planning Required Test Algorithm",
+      "requiredFeatures": [ "WorksPlanning" ],
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false
+    },
+    {
+      "name": "Rostering Required Test Algorithm",
+      "requiredFeatures": [ "Rostering" ],
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": false
+    },
+    {
+      "name": "REST API Debug Mode",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": true,
+      "parameterDescriptions": [
+        {
+          "key": "train",
+          "label": "Train from Scenario",
+          "tooltip": "Any train from the reference scenario.",
+          "type": "TimetableTrain",
+          "advanced": false
+        }
+      ]
+    },
+    {
+      "name": "Test",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": true,
+      "parameterDescriptions": [
+        {
+          "key": "train_to_shift",
+          "label": "Train from Scenario",
+          "tooltip": "Any train from the reference scenario.",
+          "type": "TimetableTrain",
+          "advanced": false
+        }
+      ]
+    },
+    {
+      "name": "Disruption algorithm",
+      "startupRestInterfaceOnly": true,
+      "acceptsTerminationByUser": true,
+      "parameterDescriptions": [
+        {
+          "key": "timeWindowParameterMandatory",
+          "label": "Time Window Parameter Mandatory",
+          "type": "TimeWindow",
+          "advanced": false,
+          "mandatory": true,
+          "tooltip": "A timewindow parameter."
+        }
+      ]
+    }
+  ]
+}
