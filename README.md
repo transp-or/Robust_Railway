@@ -84,17 +84,18 @@ python ../Robust_Railway/main.py [OPTIONS]
 | `--write_back_viriato` | Enable writing back the results to **Viriato**. |
 | `--save_timetable` | Enable saving the solution as a pickle file *(boolean flag)*. |
 | `--time_limit` | Time limit for the exact or heuristic method (in seconds). |
+| `--instance_name` | Name of the instance to solve (folder name under Robust_Railway_test/instances/). |
 
 ### Example commands
 
 **Run the heuristic mode:**
 ```bash
-python ../Robust_Railway/main.py --api_url http://localhost:8080 --heuristic --time_limit 600
+python ../Robust_Railway/main.py --api_url http://localhost:8080 --heuristic --time_limit 600 --instance_name example_scenario_1
 ```
 
 **Run with Viriato integration:**
 ```bash
-python ../Robust_Railway/main.py --api_url http://localhost:8080 --write_back_viriato
+python ../Robust_Railway/main.py --api_url http://localhost:8080 --write_back_viriato --instance_name example_scenario_1
 ```
 
 ---

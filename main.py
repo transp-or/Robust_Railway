@@ -125,7 +125,7 @@ def main():
     time_limit = args.time_limit
     instance_name = args.instance_name
 
-    INSTANCE_PATHS = get_instance_paths("Robust_Railway_test/Instances/" + instance_name + "/")
+    INSTANCE_PATHS = get_instance_paths("Robust_Railway_test/instances/" + instance_name + "/")
     PARAMS_FILE = Path(__file__).parent / "Robust_Railway" / "params.in"
 
     # --- Data loading ---
