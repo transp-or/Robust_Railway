@@ -91,7 +91,7 @@ def construct_model(
     # Model parameters
     end_time_window = EAG.end_time_window
     start_time_window = EAG.start_time_window
-    time_extra = 60  # Allow events to be rescheduled slightly after the time window
+    time_extra = EAG.time_extra  # Allow events to be rescheduled slightly after the time window
 
     big_M = (
         (end_time_window - start_time_window)
@@ -266,7 +266,7 @@ def construct_model(
             m.addConstr(z[event] == 0, name=f"event_{event.id}_shunting_capacity")
 
     # Minimum running time constraints
-    for key, value in EAG.A_train_running_similar.items():
+    for _, value in EAG.A_train_running_similar.items():
         track = value[0].section_track
         if str(track.id).startswith("a"):
             continue

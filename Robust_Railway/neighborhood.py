@@ -49,10 +49,10 @@ class OperatorsManagement:
         """Increase score of last operator."""
         if self.last_operator_name not in self.scores:
             raise OptimizationError(f"Unknown operator: {self.last_operator_name}")
-        # if pareto and obj_improvements is not None:
-        #    self.scores[self.last_operator_name] += max(sum(obj_improvements), 0.01)
-        # else:
-        #    self.scores[self.last_operator_name] += 0.01
+        if pareto and obj_improvements is not None:
+            self.scores[self.last_operator_name] += max(sum(obj_improvements), 0.01)
+        else:
+            self.scores[self.last_operator_name] += 0.01
 
     def decrease_score_last_operator(self) -> None:
         """Decrease score of last operator."""

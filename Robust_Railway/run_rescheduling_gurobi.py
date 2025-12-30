@@ -316,8 +316,6 @@ def run_rescheduling_gurobi(
     if not EAG.disruption_scenario and not skip_pass_graph:
         m.setObjectiveN(z_p(EAG, w, y, v, v2, v3, v4), 2, priority=3, reltol=0.00)
         m.setObjectiveN(z_d(EAG, x, z, y, delta), 1, priority=2, reltol=0.00)
-        # m.setObjectiveN(z_d(EAG, x, z, y, delta), 2, priority=3, reltol=0.00)
-        # m.setObjectiveN(z_p(EAG, w, y, v, v2, v3, v4), 1, priority=2, reltol=0)
         m.setObjectiveN(z_o(EAG, phi), 0, priority=1)
     elif EAG.disruption_scenario and skip_pass_graph:
         m.setObjectiveN(z_d(EAG, x, z, y, delta), 1, priority=2, reltol=0)

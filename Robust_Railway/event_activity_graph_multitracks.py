@@ -196,6 +196,7 @@ class EARailwayNetwork:
         self.delta_5: float = cast(float, kwargs["delta_5"])
         self.delta_6: float = cast(float, kwargs["delta_6"])
         self.base_date = kwargs["base_date"]
+        self.time_extra = kwargs["time_extra"]
 
         # Preprocessing info
         self.A_train_running_similar: defaultdict[Tuple[Station, Station, int, Train], list[Activity]] = defaultdict(

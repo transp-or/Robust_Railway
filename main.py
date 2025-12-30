@@ -15,20 +15,27 @@ from Robust_Railway.Viriato_plugin.build_event_activity_graph_viriato import bui
 
 # --- Path management ---
 def get_instance_paths(base_path):
-    return {
-        "junctions": base_path + "RER_Vaud_junctions_mini3.csv",
-        "links": base_path + "RER_Vaud_links_mini3.csv",
-        "stations": base_path + "RER_Vaud_stations_mini3.csv",
-        "bus": base_path + "travel_time_by_bus.csv",
-        "ODs": base_path + "ODs_mini3.csv",
-        "manual_corrections": base_path + "manual_link_corrections.csv",
-        "trains_ignore": base_path + "trains_to_ignore.csv",
-        "intersections": base_path + "intersections.csv",
+    base_path = Path(base_path)
+
+    paths = {
+        "junctions": base_path / "junctions.csv",
+        "links": base_path / "links.csv",
+        "stations": base_path / "stations.csv",
+        "bus": base_path / "bus.csv",
+        "ODs": base_path / "ODs.csv",
+        "manual_corrections": base_path / "manual_link_corrections.csv",
+        "trains_ignore": base_path / "trains_to_ignore.csv",
+        "intersections": base_path / "intersections.csv",
     }
 
+    missing = [name for name, path in paths.items() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing required file(s) in {base_path}:\n" + "\n".join(f"- {name}: {paths[name]}" for name in missing)
+        )
 
-INSTANCE_PATHS = get_instance_paths("../Robust_Railway_test/Instances/RER_Vaud/")
-PARAMS_FILE = Path(__file__).parent / "Robust_Railway" / "params.in"
+    # Convert back to strings if the rest of your code expects strings
+    return {k: str(v) for k, v in paths.items()}
 
 
 # --- Utility functions ---
@@ -52,12 +59,6 @@ def load_manual_link_corrections(filepath):
     except Exception as e:
         print(f"Error loading corrections: {e}")
         return {}
-
-
-# --- Data loading ---
-MANUAL_LINK_CORRECTIONS = load_manual_link_corrections(INSTANCE_PATHS["manual_corrections"])
-TRAINS_TO_IGNORE = load_csv_column(INSTANCE_PATHS["trains_ignore"], "train_id")
-INTERSECTIONS = load_csv_column(INSTANCE_PATHS["intersections"], "station_code")
 
 
 # --- Main function ---
@@ -102,6 +103,12 @@ def main():
         help="Time limit in seconds for the exact or heuristic method (default 300)",
     )
 
+    parser.add_argument(
+        "--instance_name",
+        required=True,
+        help="Name of the instance to solve (folder name under Robust_Railway_test/Instances/)",
+    )
+
     args = parser.parse_args()
 
     # Debug: Print received arguments
@@ -116,6 +123,15 @@ def main():
     initial_timetable_and_graph_ID = args.initial_timetable_and_graph_ID
     write_back_viriato = args.write_back_viriato
     time_limit = args.time_limit
+    instance_name = args.instance_name
+
+    INSTANCE_PATHS = get_instance_paths("Robust_Railway_test/Instances/" + instance_name + "/")
+    PARAMS_FILE = Path(__file__).parent / "Robust_Railway" / "params.in"
+
+    # --- Data loading ---
+    MANUAL_LINK_CORRECTIONS = load_manual_link_corrections(INSTANCE_PATHS["manual_corrections"])
+    TRAINS_TO_IGNORE = load_csv_column(INSTANCE_PATHS["trains_ignore"], "train_id")
+    INTERSECTIONS = load_csv_column(INSTANCE_PATHS["intersections"], "station_code")
 
     # General problem parameters
     with open(PARAMS_FILE) as file:

@@ -23,5 +23,6 @@
     "delta_5": 50,
     "delta_6": 25,
     "default_capacity": 400,
-    "base_date": "2023-09-04"
+    "base_date": "2023-09-04",
+    "time_extra": 60,
 }
