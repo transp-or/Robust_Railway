@@ -2,6 +2,8 @@ import logging
 from collections import defaultdict
 from typing import Any, Optional, Tuple, Union, cast
 
+from py_client.aidm import StopStatus
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,26 +33,37 @@ class Bus:
         self.capacity = capacity
 
 
+class NodeTrack:
+    def __init__(
+        self, node_track_id: int, code: str, incoming_section_tracks: list[int], outgoing_section_tracks: list[int]
+    ):
+        self.id = node_track_id
+        self.code = code
+        self.incoming_section_tracks: list[int] = incoming_section_tracks
+        self.outgoing_section_tracks: list[int] = outgoing_section_tracks
+
+
 class Station:
     def __init__(
-        self, station_id: int, code: str, node_tracks: list[int], shunting_yard_capacity: bool, junction: Optional[bool]
+        self,
+        station_id: int,
+        code: str,
+        node_tracks: list[NodeTrack],
+        shunting_yard_capacity: bool,
+        junction: Optional[bool],
     ):
         self.id = station_id
         self.code = code
-        self.node_tracks = [NodeTrack(nt) for nt in node_tracks]
+        self.node_tracks = [nt for nt in node_tracks]
         self.shunting_yard_capacity = shunting_yard_capacity
         self.junction = junction
-
-
-class NodeTrack:
-    def __init__(self, node_track_id: int):
-        self.id = node_track_id
 
 
 class SectionTrack:
     def __init__(
         self,
-        track_id: str,
+        track_id: int,
+        track_code: int,
         origin: Station,
         destination: Station,
         distance: float,
@@ -58,6 +71,7 @@ class SectionTrack:
         road: Optional[bool] = False,
     ):
         self.id = track_id
+        self.code = track_code
         self.origin = origin
         self.destination = destination
         self.distance = distance
@@ -170,6 +184,9 @@ class EARailwayNetwork:
         self.disruption_scenario: Optional[Disruption] = None
         self.incoming_tracks: defaultdict[Tuple[int, int], list] = defaultdict(list)
         self.outgoing_tracks: defaultdict[Tuple[int, int], list] = defaultdict(list)
+        self.separation_times: defaultdict[
+            Tuple[SectionTrack, NodeTrack, str, StopStatus, SectionTrack, NodeTrack, str, StopStatus], float
+        ] = defaultdict()
 
         # Parameters
         self.waiting_time: float = cast(float, kwargs["waiting_time"])

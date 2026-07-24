@@ -1,9 +1,11 @@
 import csv
 import pickle
 from collections import defaultdict
+from typing import DefaultDict, Tuple
 
 import pandas as pd
 from joblib import Parallel, delayed
+from py_client.aidm import RoutingPoint, StopStatus
 from py_client.algorithm_interface import algorithm_interface_factory
 
 from Robust_Railway.event_activity_graph_multitracks import (
@@ -11,6 +13,8 @@ from Robust_Railway.event_activity_graph_multitracks import (
     Disruption,
     EARailwayNetwork,
     Event,
+    NodeTrack,
+    SectionTrack,
 )
 from Robust_Railway.Viriato_plugin.events_activities import (
     add_emergency_buses,
@@ -287,12 +291,12 @@ def build_graph_from_viriato(
 
             # Get node tracks for all stations and junctions
             station_tracks = get_node_tracks(stations + junctions, api)
-            EAG = create_stations(EAG, stations, junctions, station_tracks)
+            EAG = create_stations(EAG, stations, junctions, station_tracks, api)
             for station in EAG.stations:
-                node_tracks = [t.id for t in station.node_tracks]
-                print("station:", station.id, id_to_code[station.id], node_tracks)
+                node_tracks = [t for t in station.node_tracks]
+                print("station:", station.id, id_to_code[station.id], [t.id for t in node_tracks])
 
-            sections_code = get_section_codes(stations, api)
+            sections_code = get_section_codes(stations + junctions, api)
             with open(links_file, encoding="utf-8") as f:
                 links = [(row["origin_code"], row["destination_code"]) for row in csv.DictReader(f)]
 
@@ -300,12 +304,19 @@ def build_graph_from_viriato(
             incoming_tracks = {}
             outgoing_tracks = {}
             for station in stations + junctions:
-                for node_track in station_tracks[station]:
+                if station_tracks[station]:
+                    for node_track in station_tracks[station]:
+                        section_tracks_entering, section_tracks_leaving = get_sections_tracks_per_station_node_tracks(
+                            api, station, node_track, sections_code
+                        )
+                        incoming_tracks[(station, node_track.id)] = section_tracks_entering
+                        outgoing_tracks[(station, node_track.id)] = section_tracks_leaving
+                else:
                     section_tracks_entering, section_tracks_leaving = get_sections_tracks_per_station_node_tracks(
-                        api, station, node_track, sections_code
+                        api, station, None, sections_code
                     )
-                    incoming_tracks[(station, node_track)] = section_tracks_entering
-                    outgoing_tracks[(station, node_track)] = section_tracks_leaving
+                    incoming_tracks[(station, None)] = section_tracks_entering
+                    outgoing_tracks[(station, None)] = section_tracks_leaving
             EAG.add_incoming_outcoming_tracks(incoming_tracks, outgoing_tracks)
 
             # Junction tracks
@@ -372,6 +383,97 @@ def build_graph_from_viriato(
                 incoming_tracks,
                 outgoing_tracks,
             )
+
+        # Compute minimum separation times
+        separation_times: DefaultDict[
+            Tuple[SectionTrack, NodeTrack, str, StopStatus, SectionTrack, NodeTrack, str, StopStatus], float
+        ] = defaultdict(float)
+        for s in EAG.stations:
+            incoming_routes = []
+            outgoing_routes = []
+            print("station", s.id, s.code)
+            for nt in s.node_tracks:
+                routing_point = RoutingPoint(s.id, nt.id)
+                incoming_routes.extend(api.get_incoming_routing_edges(routing_point))
+                outgoing_routes.extend(api.get_outgoing_routing_edges(routing_point))
+            for r1 in incoming_routes:
+                for r2 in incoming_routes:
+                    for ss1 in [StopStatus.passing, StopStatus.commercial_stop]:
+                        for ss2 in [StopStatus.passing, StopStatus.commercial_stop]:
+                            sep_time = api.get_separation_time_in_station_for_routes(r1, ss1, r2, ss2)
+                            key = (
+                                EAG.get_section_track_by_id(r1.start_section_track_id),
+                                EAG.get_node_track_by_id(r1.end_node_track_id, s),
+                                "incoming",
+                                ss1,
+                                EAG.get_section_track_by_id(r2.start_section_track_id),
+                                EAG.get_node_track_by_id(r2.end_node_track_id, s),
+                                "incoming",
+                                ss2,
+                            )
+                            if sep_time is not None:
+                                separation_times[key] = sep_time.total_seconds() / 60
+                            else:
+                                separation_times[key] = 0
+                for r3 in outgoing_routes:
+                    for ss1 in [StopStatus.passing, StopStatus.commercial_stop]:
+                        for ss2 in [StopStatus.passing, StopStatus.commercial_stop]:
+                            key = (
+                                EAG.get_section_track_by_id(r1.start_section_track_id),
+                                EAG.get_node_track_by_id(r1.end_node_track_id, s),
+                                "incoming",
+                                ss1,
+                                EAG.get_section_track_by_id(r3.end_section_track_id),
+                                EAG.get_node_track_by_id(r3.start_node_track_id, s),
+                                "outgoing",
+                                ss2,
+                            )
+                            sep_time = api.get_separation_time_in_station_for_routes(r1, ss1, r3, ss2)
+                            if sep_time is not None:
+                                separation_times[key] = sep_time.total_seconds() / 60
+                            else:
+                                separation_times[key] = 0
+            for r4 in outgoing_routes:
+                for r5 in incoming_routes:
+                    for ss1 in [StopStatus.passing, StopStatus.commercial_stop]:
+                        for ss2 in [StopStatus.passing, StopStatus.commercial_stop]:
+                            key = (
+                                EAG.get_section_track_by_id(r4.end_section_track_id),
+                                EAG.get_node_track_by_id(r4.start_node_track_id, s),
+                                "outgoing",
+                                ss1,
+                                EAG.get_section_track_by_id(r5.start_section_track_id),
+                                EAG.get_node_track_by_id(r5.end_node_track_id, s),
+                                "incoming",
+                                ss2,
+                            )
+                            sep_time = api.get_separation_time_in_station_for_routes(r4, ss1, r5, ss2)
+                            if sep_time is not None:
+                                separation_times[key] = sep_time.total_seconds() / 60
+                            else:
+                                separation_times[key] = 0
+                for r6 in outgoing_routes:
+                    for ss1 in [StopStatus.passing, StopStatus.commercial_stop]:
+                        for ss2 in [StopStatus.passing, StopStatus.commercial_stop]:
+                            key = (
+                                EAG.get_section_track_by_id(r4.end_section_track_id),
+                                EAG.get_node_track_by_id(r4.start_node_track_id, s),
+                                "outgoing",
+                                ss1,
+                                EAG.get_section_track_by_id(r6.end_section_track_id),
+                                EAG.get_node_track_by_id(r6.start_node_track_id, s),
+                                "outgoing",
+                                ss2,
+                            )
+                            sep_time = api.get_separation_time_in_station_for_routes(r4, ss1, r6, ss2)
+                            if sep_time is not None:
+                                separation_times[key] = sep_time.total_seconds() / 60
+                            else:
+                                separation_times[key] = 0
+        EAG.separation_times = separation_times
+
+    for st in EAG.section_tracks:
+        print("section track", st.id, st.code)
 
     # Handle disruption scenario if required
     if not solve_init_timetable:
@@ -606,5 +708,20 @@ def build_graph_from_viriato(
     }
 
     EAG.add_preprocessing_info(preprocess)
+
+    # ------------------------------------------------------------------------------------------
+    #                                   Activities per train
+    # ------------------------------------------------------------------------------------------
+
+    activities_per_train = defaultdict(list)
+    for a in categorized_activities["train"]:
+        activities_per_train[a.origin.train].append(a)
+
+    print("\nActivities per train:")
+    for train in EAG.trains:
+        train_activities = EAG.A_train[train]
+        print(f"\nTrain {train.id}: {len(train_activities)} activities")
+        for a in sorted(train_activities, key=lambda act: act.origin.scheduled_time):
+            print(EAG.print_activity_info(a))
 
     return EAG

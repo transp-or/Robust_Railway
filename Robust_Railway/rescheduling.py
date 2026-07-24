@@ -7,9 +7,18 @@ import random
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Optional, Tuple, cast
+from typing import Any, Callable, ClassVar, DefaultDict, Optional, Tuple, Union, cast
 
-from Robust_Railway.event_activity_graph_multitracks import EARailwayNetwork, Station
+from py_client.aidm import StopStatus
+
+from Robust_Railway.event_activity_graph_multitracks import (
+    Bus,
+    EARailwayNetwork,
+    NodeTrack,
+    SectionTrack,
+    Station,
+    Train,
+)
 from Robust_Railway.neighborhood import Neighborhood, OperatorOutput
 from Robust_Railway.operators.destroy_operators import (
     cancelled,
@@ -305,18 +314,18 @@ def run_operators(destroy: Callable, repair: Callable, ordering: Callable, eleme
         X_plus, Y_plus, Z_plus, PHI_plus = X_d.copy(), Y_d.copy(), Z_d.copy(), PHI_d.copy()
         # find number of trains to change tracks
         nb_disrupted_trains = 0
-        for t in EAG.trains:
-            for a in EAG.A_train[t]:
-                if (
-                    EAG.disruption_scenario
-                    and isinstance(EAG.disruption_scenario.section_tracks, list)
-                    and a.section_track in EAG.disruption_scenario.section_tracks
-                    and a.in_timetable
-                    and a.origin.scheduled_time >= EAG.disruption_scenario.start_time
-                    and a.origin.scheduled_time <= EAG.disruption_scenario.end_time
-                ):
-                    nb_disrupted_trains += 1
-                    break
+        if EAG.disruption_scenario:
+            for t in EAG.trains:
+                for a in EAG.A_train[t]:
+                    if (
+                        EAG.disruption_scenario.section_tracks is not None
+                        and a.section_track in EAG.disruption_scenario.section_tracks
+                        and a.in_timetable
+                        and a.origin.scheduled_time >= EAG.disruption_scenario.start_time
+                        and a.origin.scheduled_time <= EAG.disruption_scenario.end_time
+                    ):
+                        nb_disrupted_trains += 1
+                        break
 
         max_nb_track_changes = random.randint(1, nb_disrupted_trains)
 
@@ -575,7 +584,7 @@ class Rescheduling(Neighborhood):
             if not event.station.junction and event.node_type == "regular":
                 outflow += solution.Z[event.id]
             if inflow != outflow:
-                return False, "Flow conservation constraints violated at event"
+                return False, "Flow conservation constraints violated at event", EAG.print_event_info(event)
 
         # Cancellation feasibility
         for event in EAG.regular_disaggregated_events:
@@ -611,7 +620,13 @@ class Rescheduling(Neighborhood):
         for event in EAG.events:
             if event.node_type not in ["passenger origin", "passenger destination"]:
                 if event.scheduled_time - solution.Y[event.id] > EPS:
-                    return False, "Event scheduled before planned time"
+                    return (
+                        False,
+                        "Event scheduled before planned time",
+                        event.scheduled_time,
+                        solution.Y[event.id],
+                        EAG.print_event_info(event),
+                    )
             # Maximum allowed delay per event depending on train type
             if (
                 event.node_type
@@ -757,5 +772,262 @@ class Rescheduling(Neighborhood):
                             and solution.Y[arc.origin.id] < d_end_time - EPS
                         ):
                             return False, "Train using disrupted node track before end time"
+
+        # Check if crossing conflicts
+        for s in EAG.stations:
+            for st1 in s.node_tracks:
+                for st2 in s.node_tracks:
+                    activities_at_station_track_1 = EAG.A_waiting_pass_through_dict[(s, st1)]
+                    activities_at_station_track_2 = EAG.A_waiting_pass_through_dict[(s, st2)]
+
+                    # Group activities by train and their scheduled origin time
+                    grouped_activities_1: DefaultDict[Union[Train, Bus], DefaultDict[float, list]] = defaultdict(
+                        lambda: defaultdict(list)
+                    )
+                    grouped_activities_2: DefaultDict[Union[Train, Bus], DefaultDict[float, list]] = defaultdict(
+                        lambda: defaultdict(list)
+                    )
+
+                    for act in activities_at_station_track_1:
+                        tr1: Union[Train, Bus] = act.origin.train
+                        grouped_activities_1[tr1][act.origin.scheduled_time].append(act)
+
+                    for act in activities_at_station_track_2:
+                        tr2: Union[Train, Bus] = act.origin.train
+                        grouped_activities_2[tr2][act.origin.scheduled_time].append(act)
+
+                    for train_1 in EAG.trains:
+                        for train_2 in EAG.trains:
+                            if train_1 != train_2:
+                                for _, t1_act in grouped_activities_1[train_1].items():
+                                    for _, t2_act in grouped_activities_2[train_2].items():
+                                        if len(t1_act) > 0 and len(t2_act) > 0:
+                                            for at1 in t1_act:
+                                                for at2 in t2_act:
+                                                    # check if the two activities have a potential crossing conflict
+                                                    t1_incomings = EAG.A_plus[at1.origin]
+                                                    t1_outgoings = EAG.A_minus[at1.destination]
+                                                    t2_incomings = EAG.A_plus[at2.origin]
+                                                    t2_outgoings = EAG.A_minus[at2.destination]
+
+                                                    if at1.activity_type == "train waiting":
+                                                        ss1 = StopStatus.commercial_stop
+                                                    elif at1.activity_type == "pass-through":
+                                                        ss1 = StopStatus.passing
+                                                    else:
+                                                        raise ValueError(
+                                                            "Invalid activity type for incoming activity a1"
+                                                        )
+
+                                                    if at2.activity_type == "train waiting":
+                                                        ss2 = StopStatus.commercial_stop
+                                                    elif at2.activity_type == "pass-through":
+                                                        ss2 = StopStatus.passing
+                                                    else:
+                                                        raise ValueError(
+                                                            "Invalid activity type for incoming activity a2"
+                                                        )
+
+                                                    for a1 in t1_incomings:
+                                                        for a2 in t2_incomings:
+                                                            if (a1.activity_type != "train running") or (
+                                                                a2.activity_type != "train running"
+                                                            ):
+                                                                continue
+
+                                                            if (
+                                                                a1.origin.station == a2.origin.station
+                                                                and a1.destination.station == a2.destination.station
+                                                            ):
+                                                                # Trains run in the same direction
+                                                                if (
+                                                                    isinstance(a1.section_track, SectionTrack)
+                                                                    and isinstance(a2.section_track, SectionTrack)
+                                                                    and isinstance(a1.destination.node_track, NodeTrack)
+                                                                    and isinstance(a2.destination.node_track, NodeTrack)
+                                                                ):
+                                                                    sep_time_left = EAG.separation_times[(
+                                                                        a1.section_track,
+                                                                        a1.destination.node_track,
+                                                                        "incoming",
+                                                                        ss1,
+                                                                        a2.section_track,
+                                                                        a2.destination.node_track,
+                                                                        "incoming",
+                                                                        ss2,
+                                                                    )]
+                                                                if (
+                                                                    solution.X[at1.id] > 0.5
+                                                                    and solution.X[at2.id] > 0.5
+                                                                    and solution.X[a1.id] > 0.5
+                                                                    and solution.X[a2.id] > 0.5
+                                                                    and sep_time_left > 0
+                                                                ):
+                                                                    if (
+                                                                        solution.Y[at1.origin.id]
+                                                                        >= solution.Y[at2.origin.id]
+                                                                    ):
+                                                                        if (
+                                                                            solution.Y[at1.origin.id]
+                                                                            < solution.Y[at2.origin.id]
+                                                                            + sep_time_left
+                                                                            - EPS
+                                                                        ):
+                                                                            return (
+                                                                                False,
+                                                                                "Crossing conflict",
+                                                                            )
+
+                                                    for a3 in t1_outgoings:
+                                                        for a4 in t2_outgoings:
+                                                            if (a3.activity_type != "train running") or (
+                                                                a4.activity_type != "train running"
+                                                            ):
+                                                                continue
+                                                            if (
+                                                                a3.origin.station == a4.origin.station
+                                                                and a3.destination.station == a4.destination.station
+                                                            ):
+                                                                # Trains run in the same direction
+                                                                if (
+                                                                    isinstance(a3.section_track, SectionTrack)
+                                                                    and isinstance(a4.section_track, SectionTrack)
+                                                                    and isinstance(a3.origin.node_track, NodeTrack)
+                                                                    and isinstance(a4.origin.node_track, NodeTrack)
+                                                                ):
+                                                                    sep_time_right = EAG.separation_times[(
+                                                                        a3.section_track,
+                                                                        a3.origin.node_track,
+                                                                        "outgoing",
+                                                                        ss1,
+                                                                        a4.section_track,
+                                                                        a4.origin.node_track,
+                                                                        "outgoing",
+                                                                        ss2,
+                                                                    )]
+                                                                if (
+                                                                    solution.X[at1.id] > 0.5
+                                                                    and solution.X[at2.id] > 0.5
+                                                                    and solution.X[a3.id] > 0.5
+                                                                    and solution.X[a4.id] > 0.5
+                                                                    and sep_time_right > 0
+                                                                ):
+                                                                    if (
+                                                                        solution.Y[at1.destination.id]
+                                                                        >= solution.Y[at2.destination.id]
+                                                                    ):
+                                                                        if (
+                                                                            solution.Y[at1.destination.id]
+                                                                            < solution.Y[at2.destination.id]
+                                                                            + sep_time_right
+                                                                            - EPS
+                                                                        ):
+                                                                            return (
+                                                                                False,
+                                                                                "Crossing conflict",
+                                                                            )
+
+                                                    for a5 in t1_incomings:
+                                                        for a6 in t2_outgoings:
+                                                            if (a5.activity_type != "train running") or (
+                                                                a6.activity_type != "train running"
+                                                            ):
+                                                                continue
+                                                            if a5.destination.station == a6.origin.station:
+                                                                # Trains run in opposite directions
+                                                                if (
+                                                                    isinstance(a5.section_track, SectionTrack)
+                                                                    and isinstance(a6.section_track, SectionTrack)
+                                                                    and isinstance(a5.destination.node_track, NodeTrack)
+                                                                    and isinstance(a6.origin.node_track, NodeTrack)
+                                                                ):
+                                                                    sep_time_1 = EAG.separation_times[(
+                                                                        a5.section_track,
+                                                                        a5.destination.node_track,
+                                                                        "incoming",
+                                                                        ss1,
+                                                                        a6.section_track,
+                                                                        a6.origin.node_track,
+                                                                        "outgoing",
+                                                                        ss2,
+                                                                    )]
+                                                                if (
+                                                                    solution.X[at1.id] > 0.5
+                                                                    and solution.X[at2.id] > 0.5
+                                                                    and solution.X[a5.id] > 0.5
+                                                                    and solution.X[a6.id] > 0.5
+                                                                    and sep_time_1 > 0
+                                                                ):
+                                                                    if (
+                                                                        solution.Y[at1.origin.id]
+                                                                        >= solution.Y[at2.destination.id]
+                                                                    ):
+                                                                        if (
+                                                                            solution.Y[at1.origin.id]
+                                                                            < solution.Y[at2.destination.id]
+                                                                            + sep_time_1
+                                                                            - EPS
+                                                                        ):
+                                                                            return (
+                                                                                False,
+                                                                                "Crossing conflict",
+                                                                            )
+                                                            else:
+                                                                raise ValueError(
+                                                                    "Incoming and outgoing activities at the same",
+                                                                    " station track with the same destination",
+                                                                    "station",
+                                                                )
+
+                                                    for a7 in t1_outgoings:
+                                                        for a8 in t2_incomings:
+                                                            if (a7.activity_type != "train running") or (
+                                                                a8.activity_type != "train running"
+                                                            ):
+                                                                continue
+                                                            if a7.origin.station == a8.destination.station:
+                                                                # Trains run in opposite directions
+                                                                if (
+                                                                    isinstance(a7.section_track, SectionTrack)
+                                                                    and isinstance(a8.section_track, SectionTrack)
+                                                                    and isinstance(a7.origin.node_track, NodeTrack)
+                                                                    and isinstance(a8.destination.node_track, NodeTrack)
+                                                                ):
+                                                                    sep_time_2 = EAG.separation_times[(
+                                                                        a7.section_track,
+                                                                        a7.origin.node_track,
+                                                                        "outgoing",
+                                                                        ss1,
+                                                                        a8.section_track,
+                                                                        a8.destination.node_track,
+                                                                        "incoming",
+                                                                        ss2,
+                                                                    )]
+                                                                if (
+                                                                    solution.X[at1.id] > 0.5
+                                                                    and solution.X[at2.id] > 0.5
+                                                                    and solution.X[a7.id] > 0.5
+                                                                    and solution.X[a8.id] > 0.5
+                                                                    and sep_time_2 > 0
+                                                                ):
+                                                                    if (
+                                                                        solution.Y[at2.origin.id]
+                                                                        >= solution.Y[at1.destination.id]
+                                                                    ):
+                                                                        if (
+                                                                            solution.Y[at2.origin.id]
+                                                                            < solution.Y[at1.destination.id]
+                                                                            + sep_time_2
+                                                                            - EPS
+                                                                        ):
+                                                                            return (
+                                                                                False,
+                                                                                "Crossing conflict",
+                                                                            )
+                                                            else:
+                                                                raise ValueError(
+                                                                    "Outgoing and incoming activities at the same"
+                                                                    " station track with the same origin station"
+                                                                )
 
         return True, None

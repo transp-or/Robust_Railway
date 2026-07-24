@@ -41,7 +41,8 @@ def add_section_tracks(
         travel_times_rev = travel_time_dict.get((destination.id, origin.id), {})
         merged_travel_times = {**travel_times, **travel_times_rev}
         new_section = SectionTrack(
-            track_id=str(track_id),
+            track_id=track_id,
+            track_code=track_obj.section_code,
             origin=origin,
             destination=destination,
             distance=track_obj.distance_units,
@@ -79,15 +80,16 @@ def create_section_tracks(
 
         origin_station = EAG.get_station_by_id(origin_id)
         dest_station = EAG.get_station_by_id(dest_id)
-
         # Check direct section track connection
         origin_tracks = {
             track
             for node_track in station_tracks[origin_id]
-            for track in outgoing_tracks.get((origin_id, node_track), [])
+            for track in outgoing_tracks.get((origin_id, node_track.id), [])
         }
         dest_tracks = {
-            track for node_track in station_tracks[dest_id] for track in incoming_tracks.get((dest_id, node_track), [])
+            track
+            for node_track in station_tracks[dest_id]
+            for track in incoming_tracks.get((dest_id, node_track.id), [])
         }
         direct_tracks = origin_tracks & dest_tracks
         if direct_tracks:
@@ -97,6 +99,7 @@ def create_section_tracks(
                 EAG.add_section_track(
                     SectionTrack(
                         track_id=track,
+                        track_code=section_obj.code,
                         origin=origin_station,
                         destination=dest_station,
                         distance=section_obj.distance_units,
@@ -130,6 +133,7 @@ def create_section_tracks(
                     EAG.add_section_track(
                         SectionTrack(
                             track_id=section_track,
+                            track_code=section_obj.code,
                             origin=origin_station,
                             destination=junction_station,
                             distance=section_obj.distance_units,
@@ -154,6 +158,7 @@ def create_section_tracks(
                     EAG.add_section_track(
                         SectionTrack(
                             track_id=section_track,
+                            track_code=section_obj.code,
                             origin=junction_station,
                             destination=dest_station,
                             distance=section_obj.distance_units,
@@ -186,11 +191,11 @@ def create_section_tracks(
             for corrected_stations in corrected_stations_lst:
                 intermediate_ids = [EAG.code_to_id.get(code) for code in corrected_stations]
                 intermediate_ids = [s_id for s_id in intermediate_ids if s_id is not None]
-
                 if len(intermediate_ids) < len(corrected_stations):
                     logger.debug(
                         f"Warning: Some manual correction stations are missing for {origin_code} → {dest_code}."
                     )
+                    print(f"Warning: Some manual correction stations are missing for {origin_code} → {dest_code}.")
                     continue
 
                 EAG, tt_links = process_manual_link_correction(
@@ -251,6 +256,8 @@ def connect_junctions(
     Returns:
         dict: Updated travel time links.
     """
+
+    print("Connecting junctions:", junction_a.id if junction_a else None, "and", junction_b.id if junction_b else None)
     if not junction_a or not junction_b:
         raise ValueError("One of the junctions is None.")
     common_tracks = list(set(junctions_outgoing[junction_a.id]) & set(junctions_incoming[junction_b.id]))

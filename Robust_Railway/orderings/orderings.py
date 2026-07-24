@@ -7,7 +7,7 @@ from ..event_activity_graph_multitracks import EARailwayNetwork, NodeTrack, Sect
 from ..operators.destroy_operators import get_train_usage
 from ..operators.repair_operators_cancel import cancel_train_completely
 from ..operators.repair_operators_delay import get_earliest_start_based_on_track_occupancy
-from ..operators.track_occupancy import get_junction_usage, get_track_usage
+from ..operators.track_occupancy import get_junction_usage, get_track_usage, get_track_usage_crossing
 
 
 def random_order(EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict, PHI: dict, arc_usage: dict, trains: list[Train]):
@@ -155,8 +155,9 @@ def regret_2step(EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict, PHI: dict, ar
         start_times: dict[Union[SectionTrack, NodeTrack, None], float] = {}
         end_times: dict[Union[SectionTrack, NodeTrack, None], float] = {}
         disagg_activities = get_similar_activities(activity)
-        track_usage = get_track_usage(EAG, X, Z, Y, train)
-        junction_usage = get_junction_usage(EAG, X, Z, Y, train)
+        track_usage = get_track_usage(EAG, X, Z, Y)
+        junction_usage = get_junction_usage(EAG, X, Z, Y)
+        track_usage_crossing = get_track_usage_crossing(EAG, X, Y, Z)
         at_station = activity.origin.station == activity.destination.station
 
         current_track = activity.origin.node_track_planned if at_station else activity.section_track_planned
@@ -174,11 +175,13 @@ def regret_2step(EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict, PHI: dict, ar
                 Y[disagg_activity.origin.id],
                 Y[disagg_activity.destination.id],
                 track_usage,
+                track_usage_crossing,
                 junction_usage,
                 backward=False,
                 min_stop_time=0,
                 previous_activity_end_time=0,
                 earliest_next_activity_time=None,
+                previous_section_track=None,
                 verbose=0,
             )
         min_delay = np.inf

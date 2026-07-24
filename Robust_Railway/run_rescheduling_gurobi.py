@@ -314,9 +314,12 @@ def run_rescheduling_gurobi(
     # Set objectives based on scenario
     m.ModelSense = gp.GRB.MINIMIZE
     if not EAG.disruption_scenario and not skip_pass_graph:
-        m.setObjectiveN(z_p(EAG, w, y, v, v2, v3, v4), 2, priority=3, reltol=0.00)
-        m.setObjectiveN(z_d(EAG, x, z, y, delta), 1, priority=2, reltol=0.00)
+        m.setObjectiveN(z_d(EAG, x, z, y, delta), 2, priority=3, reltol=0.05)
+        m.setObjectiveN(z_p(EAG, w, y, v, v2, v3, v4), 1, priority=2, reltol=0.00)
         m.setObjectiveN(z_o(EAG, phi), 0, priority=1)
+        # m.setObjectiveN(z_p(EAG, w, y, v, v2, v3, v4), 2, priority=3, reltol=0.05)
+        # m.setObjectiveN(z_d(EAG, x, z, y, delta), 1, priority=2, reltol=0.00)
+        # m.setObjectiveN(z_o(EAG, phi), 0, priority=1)
     elif EAG.disruption_scenario and skip_pass_graph:
         m.setObjectiveN(z_d(EAG, x, z, y, delta), 1, priority=2, reltol=0)
         m.setObjectiveN(z_o(EAG, phi), 0, priority=1)
@@ -343,9 +346,6 @@ def run_rescheduling_gurobi(
     z_values = {k.id: v.X for k, v in z.items()}
     phi_values = {k.id: v.X for k, v in phi.items()}
 
-    if write_back_viriato:
-        write_back_to_viriato(EAG, api_url, None, x_values, y_values, z_values)
-
     if save_timetable:
         # Print objective values
         if not EAG.disruption_scenario and not skip_pass_graph:
@@ -356,9 +356,9 @@ def run_rescheduling_gurobi(
             print("z_d():", m.getObjective(1).getValue())
             print("z_o():", m.getObjective(0).getValue())
         elif EAG.disruption_scenario and not skip_pass_graph:
-            print("z_p():", m.getObjective(0).getValue())
-            print("z_d():", m.getObjective(1).getValue())
-            print("z_o():", m.getObjective(2).getValue())
+            print("z_d():", m.getObjective(2).getValue())
+            print("z_p():", m.getObjective(1).getValue())
+            print("z_o():", m.getObjective(0).getValue())
         elif not EAG.disruption_scenario and skip_pass_graph:
             print("z_d():", m.getObjective(1).getValue())
             print("z_o():", m.getObjective(0).getValue())
@@ -431,6 +431,12 @@ def run_rescheduling_gurobi(
             for a in EAG.grouped_activities["train waiting"] + EAG.grouped_activities["pass-through"]:
                 key_tuple = (a.origin.station, int(a.origin.scheduled_time), a.origin.train)
                 a.origin.node_track_planned = station_tracks.get(key_tuple, a.origin.node_track_planned)
+                print(
+                    "updating planned track for activity",
+                    EAG.print_activity_info(a),
+                    "to",
+                    station_tracks.get(key_tuple, a.origin.node_track_planned),
+                )
 
             # Update events based on y values
             for key, val in y.items():
@@ -443,3 +449,6 @@ def run_rescheduling_gurobi(
             pickle.dump(EAG, f)
 
         m.write(f"results_event_activity/Viriato_network/model_{job_id}.lp")
+
+    if write_back_viriato:
+        write_back_to_viriato(EAG, api_url, None, x_values, y_values, z_values)

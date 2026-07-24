@@ -31,7 +31,6 @@ def find_all_simple_paths(
             all_paths.append(path[:])
             tts.append(tt)
             return
-
         for link in links:
             key = (EAG.code_to_id[link[0]], EAG.code_to_id[link[1]])
             min_tt = tt_links[key]
@@ -105,6 +104,7 @@ def create_passenger_groups(
     group_sizes = {}
     group_times = {}
 
+    """
     # Create a first group with fixed origin/destination
     origin_id = EAG.code_to_id["0085ROL"]
     destination_id = EAG.code_to_id["0085NY"]
@@ -121,6 +121,7 @@ def create_passenger_groups(
     )
     EAG.add_passengers_group(passenger_group)
     group_id_counter = 1
+    """
 
     while group_id_counter < number_of_groups:
         selected = np.random.choice(len(groups), p=probabilities)

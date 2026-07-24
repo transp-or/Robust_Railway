@@ -105,7 +105,7 @@ def cancel_train_at_first_conflict(
     EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict, PHI: dict, train: Train, verbose=0
 ):
     """Cancel train at the first detected conflict (track occupancy or disruption)"""
-    track_usage = get_track_usage(EAG, X, Y, Z, train)
+    track_usage = get_track_usage(EAG, X, Y, Z)
     event = None
 
     for activity in EAG.get_ordered_activities_train(train):

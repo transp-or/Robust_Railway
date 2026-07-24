@@ -2,9 +2,17 @@ import logging
 import random
 from typing import Any, Union
 
+from py_client.aidm import StopStatus
+
 from ..event_activity_graph_multitracks import Activity, EARailwayNetwork, NodeTrack, SectionTrack, Train
 from .repair_operators_cancel import cancel_if_too_delayed, cancel_train_completely
-from .track_occupancy import determine_direction, get_junction_usage, get_minimum_headway, get_track_usage
+from .track_occupancy import (
+    determine_direction,
+    get_junction_usage,
+    get_minimum_headway,
+    get_track_usage,
+    get_track_usage_crossing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +38,14 @@ def get_earliest_start_based_on_track_occupancy(
     Y_origin: float,
     Y_destination: float,
     track_usage: dict,
+    track_usage_crossing: dict,
     junction_usage: dict,
     backward: bool,
     min_stop_time: float,
     previous_activity_end_time: float,
     earliest_next_activity_time: float | None = None,
+    previous_section_track: SectionTrack | NodeTrack | None = None,
+    prev_stop_status: StopStatus | None = None,
     verbose: int = 0,
 ):
     """
@@ -46,6 +57,7 @@ def get_earliest_start_based_on_track_occupancy(
         Y_origin (float): Time at origin event.
         Y_destination (float): Time at destination event.
         track_usage (dict): Information on track occupancy.
+        track_usage_crossing (dict): Information on crossing track occupancy.
         junction_usage (dict): Information on junction occupancy.
         backward (bool): If True, process activities backward in time.
         min_stop_time (float): Minimum required stop time.
@@ -56,6 +68,11 @@ def get_earliest_start_based_on_track_occupancy(
     Returns:
         (float, float, float): Earliest possible start time, minimum feasible end time, maximum feasible end time.
     """
+    verbose = 1
+    print("activity checking for track occupancy", EAG.print_activity_info(activity))
+    print("earliest start time", earliest_next_activity_time)
+    print("going back and checking track occupancy", backward)
+
     if verbose > 0:
         logger.debug("activity checking for track occupancy", EAG.print_activity_info(activity))
         logger.debug("earliest start time", earliest_next_activity_time)
@@ -74,113 +91,209 @@ def get_earliest_start_based_on_track_occupancy(
     scheduled_start_time = activity.origin.scheduled_time
     scheduled_end_time = activity.destination.scheduled_time
 
-    if not track:
-        usage_info = junction_usage[activity.origin.station]
-    else:
+    if not at_station:
+        # On a section track, need to check OUTGOING crossing conflicts from origin station
+
+        unavailability_periods = []
+        crossing_usage_info = track_usage_crossing.get(activity.origin.station, [])
         usage_info = track_usage[track]
 
-    if len(usage_info) == 0:
-        return scheduled_start_time, scheduled_end_time, 1e16
+        # Check if track is unavailable due to disruption
+        if EAG.disruption_scenario:
+            if EAG.disruption_scenario.section_tracks is not None:
+                for section_track in EAG.disruption_scenario.section_tracks:
+                    if section_track == track:
+                        unavailability_periods.append(
+                            (EAG.disruption_scenario.start_time, EAG.disruption_scenario.end_time)
+                        )
 
-    for i in range(len(usage_info)):
-        last_end_time = 1e16
-        occ_start, occ_end, occ_dir, occ_train, occ_headway = usage_info[i]
-        correction = 0
-        if occ_train == activity.origin.train.id:
-            continue
+        for i in range(len(crossing_usage_info)):
+            c_start, c_end, c_dir, c_train, c_section_track, c_node_track, c_type, c_ss = crossing_usage_info[i]
 
-        if occ_train not in ["D", "I"]:
-            if not at_station:
-                if occ_dir == determine_direction(activity, track):
-                    correction = get_minimum_headway(EAG, EAG.get_train_by_id(occ_train))
-                    should_end_after = max(occ_end + correction, scheduled_end_time)
-                else:
-                    correction = get_minimum_headway(EAG, EAG.get_train_by_id(occ_train)) + (occ_end - occ_start)
-                    should_end_after = scheduled_end_time
+            if c_train == activity.origin.train.id:
+                continue
+
+            # check whether we have a minimum headway problem with crossing track occupancy
+
+            if (
+                isinstance(track, SectionTrack)
+                and isinstance(activity.origin.node_track, NodeTrack)
+                and isinstance(c_section_track, SectionTrack)
+                and isinstance(c_node_track, NodeTrack)
+            ):
+                headway_before = EAG.separation_times[(
+                    track,
+                    activity.origin.node_track,
+                    "outgoing",
+                    prev_stop_status,
+                    c_section_track,
+                    c_node_track,
+                    str(c_type),
+                    c_ss,
+                )]
+            if (
+                isinstance(c_section_track, SectionTrack)
+                and isinstance(c_node_track, NodeTrack)
+                and isinstance(track, SectionTrack)
+                and isinstance(activity.origin.node_track, NodeTrack)
+            ):
+                headway_after = EAG.separation_times[(
+                    c_section_track,
+                    c_node_track,
+                    c_type,
+                    c_ss,
+                    track,
+                    activity.origin.node_track,
+                    "outgoing",
+                    prev_stop_status,
+                )]
+
+            if headway_before > 0 or headway_after > 0:
+                print(
+                    "Adding unavailability for train ",
+                    c_train,
+                    "because of crossing track occupancy",
+                    c_train,
+                    "from",
+                    c_start - headway_before,
+                    "to",
+                    c_end + headway_after,
+                )
+                unavailability_periods.append((c_start - headway_before, c_end + headway_after))
+
+        for i in range(len(usage_info)):
+            occ_start, occ_end, occ_dir, occ_train, occ_headway = usage_info[i]
+            if occ_train == activity.origin.train.id:
+                continue
+
+            headway_before = get_minimum_headway(EAG, activity.origin.train)
+            headway_after = get_minimum_headway(EAG, EAG.get_train_by_id(occ_train))
+            if occ_dir == determine_direction(activity, track):
+                pass
+                # unavailability_periods.append(...)
             else:
-                if track:
-                    correction = EAG.minimum_separation_time + (occ_end - occ_start)
-                else:
-                    correction = occ_end - occ_start
-                should_end_after = scheduled_end_time
-        else:
-            correction = occ_end - occ_start
-            should_end_after = scheduled_end_time
+                unavailability_periods.append((occ_start - headway_before, occ_end + headway_after))
 
+    else:
+        # On a station track, need to check INCOMING crossing conflicts at the current station
+
+        unavailability_periods = []
+        crossing_usage_info = track_usage_crossing.get(activity.origin.station, [])
+
+        if len(crossing_usage_info) == 0:
+            return scheduled_start_time, scheduled_end_time, 1e16
+
+        # Check is track is unavailable due to disruption
+        if EAG.disruption_scenario:
+            if EAG.disruption_scenario.node_tracks is not None:
+                for node_track in EAG.disruption_scenario.node_tracks:
+                    if node_track == track:
+                        unavailability_periods.append(
+                            (EAG.disruption_scenario.start_time, EAG.disruption_scenario.end_time)
+                        )
+
+        for i in range(len(crossing_usage_info)):
+            c_start, c_end, c_dir, c_train, c_section_track, c_node_track, c_type, c_ss = crossing_usage_info[i]
+
+            if c_train == activity.origin.train.id:
+                continue
+
+            # check whether we have a minimum headway problem with crossing track occupancy
+            if activity.activity_type == "train waiting":
+                ss1 = StopStatus.commercial_stop
+            elif activity.activity_type == "pass-through":
+                ss1 = StopStatus.passing
+            else:
+                raise ValueError("Invalid activity type for incoming activity a2")
+            if (
+                isinstance(previous_section_track, SectionTrack)
+                and isinstance(activity.destination.node_track, NodeTrack)
+                and isinstance(c_section_track, SectionTrack)
+                and isinstance(c_node_track, NodeTrack)
+            ):
+                headway_before = EAG.separation_times[(
+                    previous_section_track,
+                    activity.destination.node_track,
+                    "incoming",
+                    ss1,
+                    c_section_track,
+                    c_node_track,
+                    str(c_type),
+                    c_ss,
+                )]
+            if (
+                isinstance(c_section_track, SectionTrack)
+                and isinstance(c_node_track, NodeTrack)
+                and isinstance(previous_section_track, SectionTrack)
+                and isinstance(activity.destination.node_track, NodeTrack)
+            ):
+                headway_after = EAG.separation_times[(
+                    c_section_track,
+                    c_node_track,
+                    c_type,
+                    c_ss,
+                    previous_section_track,
+                    activity.destination.node_track,
+                    "incoming",
+                    ss1,
+                )]
+
+            if c_node_track == track:
+                start_occ = min(c_start - headway_before, c_start - EAG.minimum_separation_time)
+                end_occ = max(c_end + headway_after, c_end + EAG.minimum_separation_time)
+                print("Adding unavailability for train ", c_train, "from", start_occ, "to", end_occ)
+                unavailability_periods.append((start_occ, end_occ))
+            else:
+                if headway_before > 0 or headway_after > 0:
+                    print(
+                        "Adding unavailability for train ",
+                        c_train,
+                        "because of crossing track occupancy",
+                        c_train,
+                        "from",
+                        c_start - headway_before,
+                        "to",
+                        c_end + headway_after,
+                    )
+                    unavailability_periods.append((c_start - headway_before, c_end + headway_after))
+
+        unavailability_periods.sort()
+
+        print("unavailability_periods for station ", activity.origin.station.id, unavailability_periods)
+
+        # Check if can start before first unavailability period
+        when_I_can_start = max(scheduled_start_time, previous_activity_end_time)
         if backward:
-            when_can_I_start = max(occ_start + correction, scheduled_start_time, previous_activity_end_time)
             should_end_after = max(
-                should_end_after, earliest_next_activity_time, when_can_I_start + min_activity_duration
+                when_I_can_start + min_activity_duration, scheduled_end_time, earliest_next_activity_time
             )
         else:
-            when_can_I_start = max(occ_start + correction, scheduled_start_time, previous_activity_end_time)
-            should_end_after = max(should_end_after, when_can_I_start + min_activity_duration)
+            should_end_after = max(when_I_can_start + min_activity_duration, scheduled_end_time)
+        if should_end_after <= unavailability_periods[0][0]:
+            return when_I_can_start, should_end_after, unavailability_periods[0][0]
 
-        if len(usage_info) > i + 1:
-            next_occ_start, next_occ_end, next_occ_dir, next_occ_train, _ = usage_info[i + 1]
-            if next_occ_train == activity.origin.train.id:
-                if len(usage_info) == i + 2:
-                    return when_can_I_start, should_end_after, last_end_time
-                else:
-                    next_occ_start, next_occ_end, next_occ_dir, next_occ_train, _ = usage_info[i + 2]
-                    if next_occ_train == activity.origin.train.id:
-                        if len(usage_info) == i + 3:
-                            return when_can_I_start, should_end_after, last_end_time
-                        else:
-                            next_occ_start, next_occ_end, next_occ_dir, next_occ_train, _ = usage_info[i + 3]
-                            if next_occ_train == activity.origin.train.id:
-                                if len(usage_info) == i + 4:
-                                    return when_can_I_start, should_end_after, last_end_time
-                                else:
-                                    next_occ_start, next_occ_end, next_occ_dir, next_occ_train, _ = usage_info[i + 4]
-                            else:
-                                next_occ_start, next_occ_end, next_occ_dir, next_occ_train, _ = usage_info[i + 3]
-                    else:
-                        next_occ_start, next_occ_end, next_occ_dir, next_occ_train, _ = usage_info[i + 2]
-
-            if not next_occ_train == "D":
-                if not at_station:
-                    if next_occ_dir == determine_direction(activity, track):
-                        time_to_compare_next_occ_start = when_can_I_start + get_minimum_headway(
-                            EAG, activity.origin.train
-                        )
-                    else:
-                        time_to_compare_next_occ_start = max(
-                            when_can_I_start + min_activity_duration, should_end_after
-                        ) + get_minimum_headway(EAG, activity.origin.train)
-                else:
-                    if track:
-                        time_to_compare_next_occ_start = (
-                            max(when_can_I_start + min_activity_duration, should_end_after)
-                            + EAG.minimum_separation_time
-                        )
-                    else:
-                        time_to_compare_next_occ_start = max(when_can_I_start + min_activity_duration, should_end_after)
+        # Find first available slot between unavailability periods
+        for i in range(len(unavailability_periods) - 1):
+            available_start = max(scheduled_start_time, unavailability_periods[i][1], previous_activity_end_time)
+            if backward:
+                should_end_after = max(
+                    scheduled_end_time, earliest_next_activity_time, available_start + min_activity_duration
+                )
             else:
-                time_to_compare_next_occ_start = max(when_can_I_start + min_activity_duration, should_end_after)
+                should_end_after = max(scheduled_end_time, available_start + min_activity_duration)
+            if should_end_after <= unavailability_periods[i + 1][0]:
+                return available_start, should_end_after, unavailability_periods[i + 1][0]
 
-            if not backward and time_to_compare_next_occ_start <= next_occ_start:
-                if not at_station:
-                    if next_occ_dir == determine_direction(activity, track):
-                        last_end_time = next_occ_end - get_minimum_headway(EAG, activity.origin.train)
-                    else:
-                        last_end_time = next_occ_start - get_minimum_headway(EAG, activity.origin.train)
-                else:
-                    if track:
-                        last_end_time = next_occ_start - EAG.minimum_separation_time
-                    else:
-                        last_end_time = next_occ_start
-
-                if last_end_time >= should_end_after:
-                    return when_can_I_start, should_end_after, last_end_time
-                else:
-                    continue
-            else:
-                continue
+        # Was not able to schedule it before the last unavailability period, schedule it after
+        when_I_can_start = max(when_I_can_start, unavailability_periods[-1][1])
+        if backward:
+            should_end_after = max(
+                when_I_can_start + min_activity_duration, scheduled_end_time, earliest_next_activity_time
+            )
         else:
-            return when_can_I_start, should_end_after, last_end_time
+            should_end_after = max(when_I_can_start + min_activity_duration, scheduled_end_time)
 
-    raise ValueError("Did not found a new earliest start time on a resource")
+        return when_I_can_start, should_end_after, 1e16
 
 
 def delay_train_and_retrack(
@@ -212,6 +325,8 @@ def delay_train_and_retrack(
         (dict, dict, dict, dict): Updated X, Y, Z, PHI.
     """
 
+    verbose = 1
+
     previous_end_time = None
     previous_chosen_activity = None
     previous_activity = None
@@ -233,8 +348,13 @@ def delay_train_and_retrack(
             disrupted_stations.add(track.destination)
 
     earliest_next_activity_time = 0.0
-    track_usage = get_track_usage(EAG, X, Y, Z, train)
-    junction_usage = get_junction_usage(EAG, X, Y, Z, train)
+    track_usage = get_track_usage(EAG, X, Y, Z)
+    junction_usage = get_junction_usage(EAG, X, Y, Z)
+    track_usage_crossing = get_track_usage_crossing(EAG, X, Y, Z)
+
+    print("Track Usage crossing")
+    for k, v in track_usage_crossing.items():
+        print(k, v)
 
     Xplus, Yplus, Zplus, PHIplus = X.copy(), Y.copy(), Z.copy(), PHI.copy()
 
@@ -315,11 +435,19 @@ def delay_train_and_retrack(
                 earliest_next_activity_time if going_back else start_time if i == 0 else chosen_end_times[i - 1]
             )
             if at_station:
+                print(
+                    f"\n#{i}# At station {activity.origin.station.id} ({activity.activity_type})(start : {start_time}"
+                    f"{' [BACK]' if going_back else ''})"
+                )
                 logger.debug(
                     f"\n#{i}# At station {activity.origin.station.id} ({activity.activity_type})(start : {start_time}"
                     f"{' [BACK]' if going_back else ''})"
                 )
             else:
+                print(
+                    f"\n#{i}# Between stations {activity.origin.station.id} and {activity.destination.station.id}#"
+                    f" (start : {start_time}{' [BACK]' if going_back else ''})"
+                )
                 logger.debug(
                     f"\n#{i}# Between stations {activity.origin.station.id} and {activity.destination.station.id}#"
                     f" (start : {start_time}{' [BACK]' if going_back else ''})"
@@ -342,6 +470,7 @@ def delay_train_and_retrack(
                     disagg_activity.origin.node_track
                     and i > 0
                     and chosen_tracks[i - 1]
+                    is not None
                     not in EAG.incoming_tracks[
                         (disagg_activity.origin.station.id, disagg_activity.origin.node_track.id)
                     ]
@@ -437,18 +566,31 @@ def delay_train_and_retrack(
                 previous_activity_end_time = chosen_end_times[i - 1]
             else:
                 previous_activity_end_time = EAG.start_time_window
+            previous_section_track = chosen_tracks[i - 1]
             start_times[track], end_times[track], last_end_times[track] = get_earliest_start_based_on_track_occupancy(
                 EAG,
                 disagg_activity,
                 Y[disagg_activity.origin.id],
                 Y[disagg_activity.destination.id],
                 track_usage,
+                track_usage_crossing,
                 junction_usage,
                 going_back,
                 min_stop_time,
                 previous_activity_end_time,
                 earliest_next_activity_time,
+                previous_section_track,
                 verbose - 1,
+            )
+            print(
+                "Earliest start time for train",
+                disagg_activity.origin.train.id,
+                "on track",
+                track.id if track else None,
+                "is",
+                start_times[track],
+                "and end time is",
+                end_times[track],
             )
 
         can_change_track = False
@@ -582,6 +724,11 @@ def delay_train_and_retrack(
                     f"{end_times[chosen_track]}, but does not work with previous activity"
                 )
                 logger.debug(f"=> GOING BACK, {start_times[chosen_track]} > {last_end_times_steps[i-1]}")
+                print(
+                    f"-> Want to use {chosen_track} from {start_times[chosen_track]} to "
+                    f"{end_times[chosen_track]}, but does not work with previous activity"
+                )
+                print(f"=> GOING BACK, {start_times[chosen_track]} > {last_end_times_steps[i-1]}")
             # We have problem with previous resource
             if this_train_activities[i - 2].activity_type == "short-turning":
                 i -= 3
@@ -609,11 +756,16 @@ def delay_train_and_retrack(
                 f"Iter completed: chosen track: {track_id}, start time: {chosen_start_times[activity]}, "
                 f"end time: {chosen_end_times[i]}, last end time: {last_end_times_steps[i]}"
             )
+            print(
+                f"Iter completed: chosen track: {track_id}, start time: {chosen_start_times[activity]}, "
+                f"end time: {chosen_end_times[i]}, last end time: {last_end_times_steps[i]}"
+            )
         going_back = False
         i += 1
 
     if nb_iter == max_iter:
         logger.debug(f"Avoiding possible infinite loop in train {train.id}")
+        print(f"Avoiding possible infinite loop in train {train.id}")
         return Xplus, Yplus, Zplus, PHIplus
 
     # Select the correct activities and update Xplus and Yplus
@@ -657,6 +809,10 @@ def delay_train_and_retrack(
                     chose_tracks_i1 = None
 
                 logger.debug(
+                    f"Did not find disaggregated activity for activity {EAG.print_activity_info(activity)}, "
+                    f"chosen tracks : {chose_tracks_i_1}, {chose_tracks_i}, {chose_tracks_i1}"
+                )
+                print(
                     f"Did not find disaggregated activity for activity {EAG.print_activity_info(activity)}, "
                     f"chosen tracks : {chose_tracks_i_1}, {chose_tracks_i}, {chose_tracks_i1}"
                 )
@@ -721,6 +877,14 @@ def delay_train_and_retrack(
                 Yplus[chosen_activity.origin.id],
                 Yplus[chosen_activity.destination.id],
             )
+            print(
+                f"Set new time ({chosen_activity.origin.station.id}-{chosen_activity.destination.station.id}) at "
+                f"track {chosen_activity.section_track.id if chosen_activity.section_track else None}",
+                chosen_activity.activity_type,
+                chosen_activity.origin.train.id,
+                Yplus[chosen_activity.origin.id],
+                Yplus[chosen_activity.destination.id],
+            )
 
         if i > 0:
             if Yplus[chosen_activity.origin.id] != previous_end_time:
@@ -737,9 +901,19 @@ def delay_train_and_retrack(
                             Yplus[previous_chosen_activity.origin.id],
                             Yplus[previous_chosen_activity.destination.id],
                         )
+                        print(
+                            f"Reset new time ({previous_activity.origin.station.id}-"
+                            f"{previous_activity.destination.station.id}) at "
+                            f"track {previous_activity.section_track.id if previous_activity.section_track else None}",
+                            previous_activity.activity_type,
+                            previous_activity.origin.train.id,
+                            Yplus[previous_chosen_activity.origin.id],
+                            Yplus[previous_chosen_activity.destination.id],
+                        )
                     if Yplus[previous_chosen_activity.destination.id] < Yplus[previous_chosen_activity.origin.id]:
                         raise ValueError(
                             "Invalid activity time",
+                            EAG.print_activity_info(previous_chosen_activity),
                             Yplus[previous_chosen_activity.destination.id],
                             Yplus[previous_chosen_activity.origin.id],
                         )
@@ -918,6 +1092,7 @@ def delay_mix_tmp(
     track_change = random.choices([1, 2], weights=[p1, p2], k=1)[0]
 
     logger.debug(train.id, "track change", track_change, t_disruption, p1, p2)
+    print(train.id, "track change", track_change, t_disruption, p1, p2)
     Xplus, Yplus, Zplus, PHIplus = delay_train_and_retrack(
         EAG,
         Xplus,

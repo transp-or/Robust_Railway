@@ -159,32 +159,29 @@ def create_activities(
                 if not tracks:
                     raise ValueError(f"Tracks missing between station {prev_event[2]} and station {current_event[2]}")
                 for track in tracks:
-                    check_prev_in_outgoing = (
-                        prev_event[5] and (int(prev_event[2]), int(prev_event[5])) in outgoing_tracks
-                    )
-                    check_current_in_outgoing = (
-                        current_event[5] and (int(current_event[2]), int(current_event[5])) in incoming_tracks
-                    )
-                    if (
-                        check_prev_in_outgoing
-                        and check_current_in_outgoing
-                        and (
-                            track.id not in outgoing_tracks[(int(prev_event[2]), int(prev_event[5]))]
-                            or track.id not in incoming_tracks[(int(current_event[2]), int(current_event[5]))]
+                    if prev_event[5]:
+                        check_prev_in_outgoing = (int(prev_event[2]), int(prev_event[5])) in outgoing_tracks
+                        outgoing_tracks_for_prev = outgoing_tracks.get((int(prev_event[2]), int(prev_event[5])), [])
+                    else:
+                        check_prev_in_outgoing = (int(prev_event[2]), None) in outgoing_tracks
+                        outgoing_tracks_for_prev = outgoing_tracks.get((int(prev_event[2]), None), [])
+
+                    if current_event[5]:
+                        check_current_in_incoming = (int(current_event[2]), int(current_event[5])) in incoming_tracks
+                        incoming_tracks_for_current = incoming_tracks.get(
+                            (int(current_event[2]), int(current_event[5])), []
                         )
-                    ):
+                    else:
+                        check_current_in_incoming = (int(current_event[2]), None) in incoming_tracks
+                        incoming_tracks_for_current = incoming_tracks.get((int(current_event[2]), None), [])
+
+                    if not check_prev_in_outgoing:
                         continue
-                    elif (
-                        check_prev_in_outgoing
-                        and not check_current_in_outgoing
-                        and track.id not in outgoing_tracks[(int(prev_event[2]), int(prev_event[5]))]
-                    ):
+                    if not check_current_in_incoming:
                         continue
-                    elif (
-                        check_current_in_outgoing
-                        and not check_prev_in_outgoing
-                        and track.id not in incoming_tracks[(int(current_event[2]), int(current_event[5]))]
-                    ):
+                    if track.id not in outgoing_tracks_for_prev:
+                        continue
+                    if track.id not in incoming_tracks_for_current:
                         continue
 
                     in_timetable = (
@@ -715,7 +712,7 @@ def process_train(
                     [[
                         idx_ending_event,
                         None,
-                        EAG.end_time_window,
+                        EAG.end_time_window + EAG.time_extra,
                         station.id,
                         None,
                         None,

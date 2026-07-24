@@ -1,29 +1,52 @@
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+from py_client.aidm import StopStatus
 
 from ..event_activity_graph_multitracks import Activity, Bus, EARailwayNetwork, NodeTrack, SectionTrack, Station, Train
 
 logger = logging.getLogger(__name__)
 
 
-def determine_direction(activity: Activity, section_track: SectionTrack | NodeTrack | None) -> int:
+def determine_direction(
+    activity: Activity,
+    track: SectionTrack | NodeTrack | None,
+    previous_track: Optional[SectionTrack] = None,
+    next_track: Optional[SectionTrack] = None,
+) -> int:
     """Determine the direction of the activity on the section track."""
-    if section_track is None or isinstance(section_track, NodeTrack):
-        raise ValueError("Section track is None or a NodeTrack, cannot determine direction.")
-    if (activity.origin.station == section_track.origin) and (
-        activity.destination.station == section_track.destination
-    ):
-        direction = 1
-    elif (activity.origin.station == section_track.destination) and (
-        activity.destination.station == section_track.origin
-    ):
-        direction = -1
+    if track is None:
+        raise ValueError("Section track is None, cannot determine direction.")
+    elif isinstance(track, NodeTrack):
+        if previous_track is None and next_track is None:
+            raise ValueError(
+                f"Previous track or next track is None for activity {activity.id} on node track"
+                f" {track.id}, cannot determine direction."
+            )
+        if previous_track and previous_track.id in track.incoming_section_tracks:
+            direction = 1
+        elif previous_track and previous_track.id in track.outgoing_section_tracks:
+            direction = -1
+        elif next_track and next_track.id in track.incoming_section_tracks:
+            direction = -1
+        elif next_track and next_track.id in track.outgoing_section_tracks:
+            direction = 1
+        else:
+            raise ValueError(
+                f"Problem with activity {activity.id} on node track {track.id} : previous track "
+                f"does not correspond to incoming or outgoing tracks"
+            )
     else:
-        raise ValueError(
-            f"Problem with activity {activity} on section track {section_track} : origin "
-            f" and destination do not correspond"
-        )
+        if (activity.origin.station == track.origin) and (activity.destination.station == track.destination):
+            direction = 1
+        elif (activity.origin.station == track.destination) and (activity.destination.station == track.origin):
+            direction = -1
+        else:
+            raise ValueError(
+                f"Problem with activity {activity.id} on section track {track.id} : origin "
+                f" and destination do not correspond"
+            )
     return direction
 
 
@@ -35,9 +58,96 @@ def get_minimum_headway(EAG: EARailwayNetwork, train: Train | Bus):
         return EAG.minimum_headway_freight_trains
 
 
-def get_track_usage(
-    EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict, train: Train
-) -> Dict[SectionTrack | NodeTrack, List[Tuple]]:
+def get_track_usage_crossing(
+    EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict
+) -> Dict[Station, List[Tuple[float, float, Any, Any, Any, Any, str, Any]]]:
+    """Determines the occupation of a node track conflicting with an incoming or outcoming route
+
+    Args:
+        EAG (EARailwayNetwork): Event Activity Graph
+        X (dict): X variable
+        Y (dict): Y variable
+        Z (dict): Z variable
+
+    Returns:
+        track_usage (Dict[Station, List[Tuple[float, float, Any, Any, Any, Any, str, Any]]]): List of tuples
+        with the (start_time, end_time, direction, train, section track, node track, type ("incoming",
+        "outgoing", "D", or "I"), and stop status) of each occupation of the tracks or (start_time, end_time,
+        None, None, None, None, "D"", None) for a disruption. The first occupation is always the initial
+        occupation of the track, with start_time = end_time = EAG.start_time_window and type "I"
+    """
+    track_usage: Dict[Station, List[Tuple[float, float, Any, Any, Any, Any, str, Any]]] = defaultdict(list)
+
+    for t in EAG.trains:
+        activities_train_activated = []
+        for a in EAG.get_ordered_activities_train(t):
+            if X[a.id] > 0.5:
+                activities_train_activated.append(a)
+        previous_a = activities_train_activated[0]
+        for a in activities_train_activated[1:]:
+            if previous_a.activity_type == "train running" and a.activity_type in ["pass-through", "train waiting"]:
+                if a.activity_type == "train waiting":
+                    ss = StopStatus.commercial_stop
+                elif a.activity_type == "pass-through":
+                    ss = StopStatus.passing
+                else:
+                    raise ValueError("Invalid activity type for activity")
+                track_usage[a.origin.station].append((
+                    Y[a.origin.id],
+                    Y[a.destination.id],
+                    determine_direction(previous_a, previous_a.section_track),
+                    a.origin.train.id,
+                    previous_a.section_track,
+                    a.origin.node_track,
+                    "incoming",
+                    ss,
+                ))
+            elif previous_a.activity_type in ["pass-through", "train waiting"] and a.activity_type == "train running":
+                if previous_a.activity_type == "train waiting":
+                    ss = StopStatus.commercial_stop
+                elif previous_a.activity_type == "pass-through":
+                    ss = StopStatus.passing
+                else:
+                    raise ValueError("Invalid activity type for activity")
+                track_usage[previous_a.origin.station].append((
+                    Y[previous_a.origin.id],
+                    Y[previous_a.destination.id],
+                    determine_direction(a, a.section_track),
+                    a.origin.train.id,
+                    a.section_track,
+                    previous_a.origin.node_track,
+                    "outgoing",
+                    ss,
+                ))
+
+    # Add disruptions
+    if EAG.disruption_scenario:
+        for node_track in EAG.disruption_scenario.node_tracks:  # type: ignore
+            for station in EAG.stations:
+                if node_track in station.node_tracks:
+                    track_usage[station].append((
+                        EAG.disruption_scenario.start_time,
+                        EAG.disruption_scenario.end_time,
+                        0,
+                        "D",
+                        None,
+                        node_track,
+                        "D",
+                        None,
+                    ))
+    # Add initial occupation for node tracks
+    for s in EAG.stations:
+        for node_track in s.node_tracks:
+            track_usage[s].append((EAG.start_time_window, EAG.start_time_window, 0, "I", None, node_track, "I", None))
+
+    # Sort usage by start and end time
+    for x in track_usage.values():
+        x.sort(key=lambda tup: (tup[0], tup[1]))
+
+    return track_usage
+
+
+def get_track_usage(EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict) -> Dict[SectionTrack | NodeTrack, List[Tuple]]:
     """Determine when each track is used by trains in the current solution of the timetable
 
     Args:
@@ -80,7 +190,12 @@ def get_track_usage(
                     )
                     if Y[start.id] - Y[end.id] > EPS and activity.activity_type != "ending":
                         logger.debug(EAG.print_activity_info(activity))
-                        raise ValueError("Problematic activity: start time after end time")
+                        raise ValueError(
+                            "Problematic activity: start time after end time",
+                            Y[start.id],
+                            Y[end.id],
+                            EAG.print_activity_info(activity),
+                        )
 
     # Add disruptions
     if EAG.disruption_scenario:
@@ -129,7 +244,7 @@ def get_track_usage(
     return track_usage
 
 
-def get_junction_usage(EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict, train: Train) -> Dict[Station, List[Tuple]]:
+def get_junction_usage(EAG: EARailwayNetwork, X: dict, Y: dict, Z: dict) -> Dict[Station, List[Tuple]]:
     """Determine when each junction station is used by trains in the current solution of the timetable
 
     Args:

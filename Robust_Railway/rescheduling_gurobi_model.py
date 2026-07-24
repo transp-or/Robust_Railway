@@ -2,6 +2,9 @@ from collections import defaultdict
 from typing import Any, DefaultDict, Tuple
 
 import gurobipy as gp
+from py_client.aidm import StopStatus
+
+from Robust_Railway.find_paths import find_all_paths
 
 
 # First objective function - Passenger inconvenience
@@ -93,6 +96,20 @@ def construct_model(
     start_time_window = EAG.start_time_window
     time_extra = EAG.time_extra  # Allow events to be rescheduled slightly after the time window
 
+    # Preprocess passenger paths
+
+    paths = []
+    all_paths = {}
+    for group in EAG.passengers_groups:
+        all_paths[group.id] = find_all_paths(group, EAG, 15, 2, 2)
+        paths.extend(all_paths[group.id])
+        print("Paths created for passenger group:", group.id)
+    print(f"Total number of paths for all passenger groups: {len(paths)}")
+
+    def is_in_path(arc, path):
+        arc = next(a for acts in EAG.grouped_activities.values() for a in acts if a.id == arc.id)
+        return 1 if arc in path else 0
+
     big_M = (
         (end_time_window - start_time_window)
         + time_extra
@@ -125,12 +142,20 @@ def construct_model(
             if pairs:
                 q.update(m.addVars(pairs, vtype="B", name="q"))
 
+    # Pairwise train headway variables
     q2 = {}
     for section_track in EAG.section_tracks:
         acts = EAG.train_running_dict[section_track]
         pairs = [(a1, a2) for a1 in acts for a2 in acts if a1.origin.train != a2.origin.train]
         if pairs:
             q2.update(m.addVars(pairs, vtype="B", name="q2"))
+
+    for station in EAG.stations:
+        for station_track in station.node_tracks:
+            acts = EAG.A_waiting_pass_through_dict[(station, station_track)]
+            pairs = [(a1, a2) for a1 in acts for a2 in acts if a1.origin.train != a2.origin.train]
+            if pairs:
+                q.update(m.addVars(pairs, vtype="B", name="q"))
 
     # Time variables
     y_lb = start_time_window
@@ -168,6 +193,8 @@ def construct_model(
         )
         v4 = m.addVars(EAG.grouped_activities["access"], lb=0, ub=EAG.time_horizon, vtype="C", name="v4")
         phi = m.addVars(EAG.grouped_activities["emergency bus"], vtype="B", name="phi")
+        p = m.addVars(range(len(paths)), EAG.passengers_groups, vtype="B", name="p")  # new
+        u = m.addVars(EAG.categorized_activities["group"], EAG.passengers_groups, vtype="B", name="u")  # new
 
         # Auxiliary variables for max() linearization
         z_before_pref_time = {}
@@ -209,7 +236,7 @@ def construct_model(
                     name=f"dwelling_cost_{arc.id}_{group}",
                 )
 
-    # Constraints for train activities, time, and separation
+    # Constraints to set delta variables
     for t in EAG.trains:
         for s in EAG.get_stations_per_train(t):
             if not s.junction:
@@ -240,14 +267,13 @@ def construct_model(
                 name=f"time_order_arc_{arc.id}_train_{arc.origin.train.id}_from_{arc.origin.station.id}_to_{arc.destination.station.id}",
             )
 
-    # Train path selection constraints
+    # Start and flow conservation constraints
     for train in EAG.trains:
         m.addConstr(
             gp.quicksum(x[arc] for arc in EAG.starting_activities_dict[train]) == 1,
             name=f"train_{train.id}_start_constraint",
         )
 
-    # Flow conservation and event constraints
     for event in EAG.regular_rerouting_turning_events:
         if (not event.station.junction) and (event.node_type in ["regular", "rerouting"]):
             m.addConstr(
@@ -261,6 +287,7 @@ def construct_model(
                 name=f"event_{event.id}_flow_conservation",
             )
 
+    # No cancellation at shunting yard without capacity constraints
     for event in EAG.regular_disaggregated_events:
         if not event.station.shunting_yard_capacity:
             m.addConstr(z[event] == 0, name=f"event_{event.id}_shunting_capacity")
@@ -302,7 +329,7 @@ def construct_model(
                 name=f"short_turning_{arc.id}",
             )
 
-    # Event time window constraints
+    # Maximum delay constraints
     for event in EAG.events:
         if event.node_type not in ["passenger origin", "passenger destination"]:
             m.addConstr(y[event] >= float(event.scheduled_time), name=f"event_{event.id}_scheduled_time")
@@ -321,6 +348,7 @@ def construct_model(
                     name=f"event_{event.id}_max_delay_freight",
                 )
 
+    # Separation time constraints (at station)
     minimum_separation_time_13 = EAG.minimum_separation_time
     minimum_separation_time_14 = EAG.minimum_separation_time
     for station in EAG.stations:
@@ -337,9 +365,10 @@ def construct_model(
             for t1 in EAG.trains:
                 for t2 in EAG.trains:
                     if t1 != t2:
-                        for t1_time, t1_act in grouped_activities[t1].items():
-                            for t2_time, t2_act in grouped_activities[t2].items():
+                        for _, t1_act in grouped_activities[t1].items():
+                            for _, t2_act in grouped_activities[t2].items():
                                 if len(t1_act) > 0 and len(t2_act) > 0:
+
                                     m.addConstr(
                                         y[t1_act[0].origin]
                                         >= y[t2_act[0].destination]
@@ -352,7 +381,7 @@ def construct_model(
                                             - gp.quicksum(x[a2] for a2 in t2_act)
                                         ),
                                         name=f"sectiontrack_{station_track.id}_train1_{t1.id}_train2_{t2.id}_constraint12",
-                                    )  # updated (12)
+                                    )
 
                                     m.addConstr(
                                         y[t2_act[0].origin]
@@ -366,8 +395,276 @@ def construct_model(
                                             - gp.quicksum(x[a2] for a2 in t2_act)
                                         ),
                                         name=f"sectiontrack_{station_track.id}_train1_{t1.id}_train2_{t2.id}_constraint13",
-                                    )  # updated (13)
+                                    )
 
+    # Crossing conflict constraints
+    print("Adding crossing conflict constraints...")
+    nb_crossing_constraints = 0
+    q3 = {}
+    q4 = {}
+    q5 = {}
+    q6 = {}
+    i = 0
+    for s in EAG.stations:
+        for st1 in s.node_tracks:
+            for st2 in s.node_tracks:
+                # if st1.id == st2.id:
+                #    continue
+                activities_at_station_track_1 = EAG.A_waiting_pass_through_dict[(s, st1)]
+                activities_at_station_track_2 = EAG.A_waiting_pass_through_dict[(s, st2)]
+
+                # Group activities by train and their scheduled origin time
+                grouped_activities_1: DefaultDict[Any, DefaultDict[Any, list]] = defaultdict(lambda: defaultdict(list))
+                grouped_activities_2: DefaultDict[Any, DefaultDict[Any, list]] = defaultdict(lambda: defaultdict(list))
+
+                for act in activities_at_station_track_1:
+                    train = act.origin.train
+                    grouped_activities_1[train][act.origin.scheduled_time].append(act)
+
+                for act in activities_at_station_track_2:
+                    train = act.origin.train
+                    grouped_activities_2[train][act.origin.scheduled_time].append(act)
+
+                for t1 in EAG.trains:
+                    for t2 in EAG.trains:
+                        if t1 != t2:
+                            for _, t1_act in grouped_activities_1[t1].items():
+                                for _, t2_act in grouped_activities_2[t2].items():
+                                    if len(t1_act) > 0 and len(t2_act) > 0:
+                                        for at1 in t1_act:
+                                            for at2 in t2_act:
+                                                key = (at1, at2)
+                                                if key not in q3:
+                                                    q3[key] = m.addVar(vtype="B", name=f"q3_{i}")
+                                                    i += 1
+                                                if key not in q4:
+                                                    q4[key] = m.addVar(vtype="B", name=f"q4_{i}")
+                                                    i += 1
+                                                if key not in q5:
+                                                    q5[key] = m.addVar(vtype="B", name=f"q5_{i}")
+                                                    i += 1
+                                                if key not in q6:
+                                                    q6[key] = m.addVar(vtype="B", name=f"q6_{i}")
+                                                    i += 1
+                                                # check if the two activities have a potential crossing conflict
+                                                t1_incomings = EAG.A_plus[at1.origin]
+                                                t1_outgoings = EAG.A_minus[at1.destination]
+                                                t2_incomings = EAG.A_plus[at2.origin]
+                                                t2_outgoings = EAG.A_minus[at2.destination]
+
+                                                if at1.activity_type == "train waiting":
+                                                    ss1 = StopStatus.commercial_stop
+                                                elif at1.activity_type == "pass-through":
+                                                    ss1 = StopStatus.passing
+                                                else:
+                                                    raise ValueError("Invalid activity type for incoming activity a1")
+
+                                                if at2.activity_type == "train waiting":
+                                                    ss2 = StopStatus.commercial_stop
+                                                elif at2.activity_type == "pass-through":
+                                                    ss2 = StopStatus.passing
+                                                else:
+                                                    raise ValueError("Invalid activity type for incoming activity a2")
+
+                                                for a1 in t1_incomings:
+                                                    for a2 in t2_incomings:
+                                                        if (a1.activity_type != "train running") or (
+                                                            a2.activity_type != "train running"
+                                                        ):
+                                                            continue
+
+                                                        if (
+                                                            a1.origin.station == a2.origin.station
+                                                            and a1.destination.station == a2.destination.station
+                                                        ):
+                                                            # Trains run in the same direction
+                                                            sep_time_left = EAG.separation_times[(
+                                                                a1.section_track,
+                                                                a1.destination.node_track,
+                                                                "incoming",
+                                                                ss1,
+                                                                a2.section_track,
+                                                                a2.destination.node_track,
+                                                                "incoming",
+                                                                ss2,
+                                                            )]
+                                                            if sep_time_left > 0:
+
+                                                                m.addConstr(
+                                                                    y[at1.origin] - y[at2.origin]
+                                                                    >= -big_M * (1 - q3[key])
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at2.origin] - y[at1.origin] >= -big_M * q3[key]
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at1.origin]
+                                                                    >= y[at2.origin]
+                                                                    + sep_time_left
+                                                                    - big_M
+                                                                    * (
+                                                                        (1 - q3[key])
+                                                                        + (4 - x[at1] - x[at2] - x[a1] - x[a2])
+                                                                    ),
+                                                                    name=f"{i}_conflicts",
+                                                                )
+                                                                nb_crossing_constraints += 1
+                                                        else:
+                                                            continue  # no possible crossing conflict
+
+                                                for a3 in t1_outgoings:
+                                                    for a4 in t2_outgoings:
+                                                        if (a3.activity_type != "train running") or (
+                                                            a4.activity_type != "train running"
+                                                        ):
+                                                            continue
+                                                        if (
+                                                            a3.origin.station == a4.origin.station
+                                                            and a3.destination.station == a4.destination.station
+                                                        ):
+                                                            # Trains run in the same direction
+                                                            sep_time_right = EAG.separation_times[(
+                                                                a3.section_track,
+                                                                a3.origin.node_track,
+                                                                "outgoing",
+                                                                ss1,
+                                                                a4.section_track,
+                                                                a4.origin.node_track,
+                                                                "outgoing",
+                                                                ss2,
+                                                            )]
+                                                            if sep_time_right > 0:
+
+                                                                m.addConstr(
+                                                                    y[at1.destination] - y[at2.destination]
+                                                                    >= -big_M * (1 - q4[key])
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at2.destination] - y[at1.destination]
+                                                                    >= -big_M * q4[key]
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at1.destination]
+                                                                    >= y[at2.destination]
+                                                                    + sep_time_right
+                                                                    - big_M
+                                                                    * (
+                                                                        (1 - q4[key])
+                                                                        + (4 - x[at1] - x[at2] - x[a3] - x[a4])
+                                                                    ),
+                                                                    name=f"{i}_conflicts",
+                                                                )
+                                                                nb_crossing_constraints += 1
+
+                                                        else:
+                                                            continue  # no possible crossing conflict
+
+                                                for a5 in t1_incomings:
+                                                    for a6 in t2_outgoings:
+                                                        if (a5.activity_type != "train running") or (
+                                                            a6.activity_type != "train running"
+                                                        ):
+                                                            continue
+                                                        if a5.destination.station == a6.origin.station:
+                                                            # Trains run in opposite directions
+                                                            sep_time_1 = EAG.separation_times[(
+                                                                a5.section_track,
+                                                                a5.destination.node_track,
+                                                                "incoming",
+                                                                ss1,
+                                                                a6.section_track,
+                                                                a6.origin.node_track,
+                                                                "outgoing",
+                                                                ss2,
+                                                            )]
+                                                            if sep_time_1 > 0:
+
+                                                                m.addConstr(
+                                                                    y[at1.origin] - y[at2.destination]
+                                                                    >= -big_M * (1 - q5[key])
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at2.destination] - y[at1.origin]
+                                                                    >= -big_M * q5[key]
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at1.origin]
+                                                                    >= y[at2.destination]
+                                                                    + sep_time_1
+                                                                    - big_M
+                                                                    * (
+                                                                        (1 - q5[key])
+                                                                        + (4 - x[at1] - x[at2] - x[a5] - x[a6])
+                                                                    ),
+                                                                    name=f"{i}_conflicts",
+                                                                )
+                                                                nb_crossing_constraints += 1
+
+                                                        else:
+                                                            raise ValueError(
+                                                                "Incoming and outgoing activities",
+                                                                "at the same station track with ",
+                                                                "the same destination station",
+                                                            )
+
+                                                for a7 in t1_outgoings:
+                                                    for a8 in t2_incomings:
+                                                        if (a7.activity_type != "train running") or (
+                                                            a8.activity_type != "train running"
+                                                        ):
+                                                            continue
+                                                        if a7.origin.station == a8.destination.station:
+                                                            # Trains run in opposite directions
+                                                            sep_time_2 = EAG.separation_times[(
+                                                                a7.section_track,
+                                                                a7.origin.node_track,
+                                                                "outgoing",
+                                                                ss1,
+                                                                a8.section_track,
+                                                                a8.destination.node_track,
+                                                                "incoming",
+                                                                ss2,
+                                                            )]
+                                                            if sep_time_2 > 0:
+
+                                                                m.addConstr(
+                                                                    y[at2.origin] - y[at1.destination]
+                                                                    >= -big_M * (1 - q6[key])
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at1.destination] - y[at2.origin]
+                                                                    >= -big_M * q6[key]
+                                                                )
+
+                                                                m.addConstr(
+                                                                    y[at2.origin]
+                                                                    >= y[at1.destination]
+                                                                    + sep_time_2
+                                                                    - big_M
+                                                                    * (
+                                                                        (1 - q6[key])
+                                                                        + (4 - x[at1] - x[at2] - x[a7] - x[a8])
+                                                                    ),
+                                                                    name=f"{i}_conflicts",
+                                                                )
+                                                                nb_crossing_constraints += 1
+
+                                                        else:
+                                                            raise ValueError(
+                                                                "Outgoing and incoming activities at the same station"
+                                                                " track with the same origin station"
+                                                            )
+
+    print(f"Number of crossing conflict constraints added: {nb_crossing_constraints}")
+
+    # Headway constraints (on section track)
     for section_track in EAG.section_tracks:
         activities_at_section_track = EAG.train_running_dict[section_track]
 
@@ -550,13 +847,64 @@ def construct_model(
                     y[arc.destination] - y[arc.origin] <= EAG.maximum_transfer_time + big_M * (1 - w[arc, group])
                 )  # (31)
 
+            # old constraints
+            """
             for arc in EAG.grouped_activities["passenger running"]:
                 m.addConstr(w[arc, group] <= sum(x[arc_] for arc_ in EAG.agg_to_disagg_activities[arc]))  # (32)
 
+                #tmp_large_capacity = arc.origin.train.capacity * 1000
                 m.addConstr(
                     sum(group.num_passengers * w[arc, group] for group in EAG.passengers_groups)
                     <= arc.origin.train.capacity * sum(x[arc_] for arc_ in EAG.agg_to_disagg_activities[arc])
                 )  # (33)
+            """
+
+            # new constraints
+
+            for arc in EAG.grouped_activities["passenger running"]:
+                m.addConstr(u[arc, group] <= sum(x[arc_] for arc_ in EAG.agg_to_disagg_activities[arc]))  # (32)
+
+            # one path chosen
+            m.addConstr(gp.quicksum(p[path_id, group] for path_id, path in enumerate(all_paths[group.id])) == 1)
+
+            prev_groups = [g for g in EAG.passengers_groups if g.priority < group.priority]
+
+            for arc in EAG.grouped_activities["passenger running"]:
+
+                # free arcs
+                m.addConstr(
+                    u[arc, group]
+                    <= gp.quicksum(
+                        is_in_path(arc, path) * p[path_id, group] for path_id, path in enumerate(all_paths[group.id])
+                    )
+                )
+
+                # used arc must be free
+                m.addConstr(w[arc, group] <= u[arc, group])
+
+                used_capacity = gp.quicksum(g_.num_passengers * w[arc, g_] for g_ in prev_groups)
+
+                # capacity constraint
+                # arc.origin.train.capacity = 10**10
+                # tmp_large_capacity = arc.origin.train.capacity * 10000
+                m.addConstr(
+                    used_capacity
+                    <= (arc.origin.train.capacity - group.num_passengers) * u[arc, group]
+                    + arc.origin.train.capacity * (1 - u[arc, group])
+                )
+
+            for path_id, path in enumerate(all_paths[group.id]):
+                for arc in path:
+                    arc = next(a for acts in EAG.grouped_activities.values() for a in acts if a.id == arc.id)
+
+                    # used arcs only in used path
+                    m.addConstr(w[arc, group] >= p[path_id, group])
+
+                    if arc.activity_type == "passenger running":
+                        # used path need trains
+                        m.addConstr(p[path_id, group] <= sum(x[arc_] for arc_ in EAG.agg_to_disagg_activities[arc]))
+
+            # end of new constraints
 
         for event_1 in EAG.regular_rerouting_turning_aggregated_events:
             m.addConstrs(y[event_1] == y[e] for e in EAG.agg_to_disagg_events[event_1])  # (35)
@@ -570,7 +918,7 @@ def construct_model(
 
             m.addConstr(
                 sum(group.num_passengers * w[a, group] for group in EAG.passengers_groups)
-                <= a.origin.train.capacity * phi[a]
+                <= arc.origin.train.capacity * phi[a]
             )  # capacity constraints of emergency bus
 
     m.update()

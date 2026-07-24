@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 from py_client.aidm import RoutingPoint
 
-from Robust_Railway.event_activity_graph_multitracks import Activity, EARailwayNetwork, Event, Train
+from Robust_Railway.event_activity_graph_multitracks import Activity, EARailwayNetwork, Event, NodeTrack, Train
 
 
 def load_csv_column(file_path: str, column_name: str) -> list[str]:
@@ -23,20 +23,31 @@ def get_section_codes(station_ids: list[int], api: Any) -> set[str]:
 
 
 def get_sections_tracks_per_station_node_tracks(
-    api: Any, station_id: int, node_track: int, sections_code: set[str]
+    api: Any, station_id: int, node_track: NodeTrack | None, sections_code: set[str]
 ) -> tuple[list[int], list[int]]:
     """Get section tracks entering and leaving a station node track."""
     section_tracks_entering = []
     section_tracks_leaving = []
-    routing_point = RoutingPoint(station_id, node_track)
-    incoming_routes = api.get_incoming_routing_edges(routing_point)
-    outcoming_routes = api.get_outgoing_routing_edges(routing_point)
-    for incoming_route in incoming_routes:
-        if api.get_section_track(incoming_route.start_section_track_id).section_code in sections_code:
-            section_tracks_entering.append(incoming_route.start_section_track_id)
-    for outcoming_route in outcoming_routes:
-        if api.get_section_track(outcoming_route.end_section_track_id).section_code in sections_code:
-            section_tracks_leaving.append(outcoming_route.end_section_track_id)
+    routing_point = RoutingPoint(station_id, node_track.id if node_track else None)
+
+    if node_track:
+        incoming_routes = api.get_incoming_routing_edges(routing_point)
+        outcoming_routes = api.get_outgoing_routing_edges(routing_point)
+        for incoming_route in incoming_routes:
+            if api.get_section_track(incoming_route.start_section_track_id).section_code in sections_code:
+                section_tracks_entering.append(incoming_route.start_section_track_id)
+        for outcoming_route in outcoming_routes:
+            if api.get_section_track(outcoming_route.end_section_track_id).section_code in sections_code:
+                section_tracks_leaving.append(outcoming_route.end_section_track_id)
+    else:
+        entering_tracks = api.get_section_tracks_to(station_id)
+        leaving_tracks = api.get_section_tracks_from(station_id)
+        for t1 in entering_tracks:
+            if t1.section_code in sections_code:
+                section_tracks_entering.append(t1.id)
+        for t2 in leaving_tracks:
+            if t2.section_code in sections_code:
+                section_tracks_leaving.append(t2.id)
     return section_tracks_entering, section_tracks_leaving
 
 
@@ -269,7 +280,10 @@ def convert_to_EAG_obj(EAG, results):
 
 def get_node_tracks(station_ids: list[int], api: Any) -> dict[int, list[int]]:
     """Returns a dictionary mapping stations to their node tracks."""
-    return {s_id: [nt.id for nt in api.get_node(s_id).node_tracks] for s_id in station_ids}
+    node_tracks = {}
+    for s_id in station_ids:
+        node_tracks.update({s_id: [nt for nt in api.get_node(s_id).node_tracks]})
+    return node_tracks
 
 
 def train_turning(train: Train, EAG: EARailwayNetwork) -> bool:

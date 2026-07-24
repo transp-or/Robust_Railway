@@ -1,7 +1,5 @@
-import os
 import pickle
 
-from Robust_Railway.alns import ParetoClass, alns
 from Robust_Railway.event_activity_graph_multitracks import Train
 from Robust_Railway.operators.repair_operators_cancel import (
     cancel_partially_operator,
@@ -13,9 +11,7 @@ from Robust_Railway.operators.repair_operators_delay import (
     delay_train_and_retrack,
 )
 from Robust_Railway.orderings.orderings import keep_order_at_disruption, regret_2step
-from Robust_Railway.passenger_assignment import passenger_assignment
 from Robust_Railway.rescheduling import DispositionTimetable, Rescheduling
-from Robust_Railway.Viriato_plugin.write_back_to_viriato import write_back_to_viriato
 
 
 def print_updated_timetable(EAG, Xplus, Yplus, Zplus, PHIplus):
@@ -135,6 +131,7 @@ def generate_starting_solution(EAG, train_list, x, y, **kwargs):
         Xd, Yd, Zd, PHId = cancel_train_completely(EAG, Xd, Yd, Zd, PHId, t)
     Xplus, Yplus, Zplus, PHIplus = Xd.copy(), Yd.copy(), Zd.copy(), PHId.copy()
     for t in train_list:
+        print("Generating starting solution for train", t.id)
         Xplus, Yplus, Zplus, PHIplus = set_train_to_timetable(EAG, Xplus, Yplus, Zplus, PHIplus, t)
         Xplus, Yplus, Zplus, PHIplus = delay_train_and_retrack(EAG, Xplus, Yplus, Zplus, PHIplus, t, **kwargs)
         Xplus, Yplus, Zplus, PHIplus = cancel_if_too_delayed(EAG, Xplus, Yplus, Zplus, PHIplus, t)
@@ -167,8 +164,6 @@ def run_rescheduling_heuristic(
         raise ValueError("Initial timetable contains emergency vehicles")
 
     train_activities = EAG.categorized_activities["train"]
-    job_id = os.environ.get("SLURM_JOB_ID", "nojobid")
-    FILE_NAME = f"results_event_activity/Viriato_network/ALNS/pareto_{job_id}"
 
     the_rescheduling = Rescheduling(EAG)
     DispositionTimetable.set_EAG(EAG)
@@ -182,6 +177,12 @@ def run_rescheduling_heuristic(
     starting_solution_1 = generate_starting_solution(
         EAG, trains_at_disrupted, x, y, section_track_change=2, station_track_change=2
     )
+    print(
+        "Is the first initial solution valid?",
+        the_rescheduling.is_valid(starting_solution_1),
+        "cost:",
+        [starting_solution_1.z_d, starting_solution_1.z_p, starting_solution_1.z_o],
+    )
 
     # Second initial solution: partial cancellation
     X, Y, Z, PHI = set_initial_dict(EAG, train_activities, x, y)
@@ -194,10 +195,22 @@ def run_rescheduling_heuristic(
     for t in EAG.trains:
         Xplus, Yplus, Zplus, PHIplus = cancel_partially_operator(EAG, Xplus, Yplus, Zplus, PHIplus, X, Y, Z, PHI, t)
     starting_solution_2 = DispositionTimetable.from_decisions(Xplus, Yplus, Zplus, PHIplus)
+    print(
+        "Is the second initial solution valid?",
+        the_rescheduling.is_valid(starting_solution_2),
+        "cost:",
+        [starting_solution_2.z_d, starting_solution_2.z_p, starting_solution_2.z_o],
+    )
 
     # Third initial solution: delay and retrack with no track change
     starting_solution_3 = generate_starting_solution(
         EAG, trains_at_disrupted, x, y, section_track_change=0, station_track_change=0
+    )
+    print(
+        "Is the third initial solution valid?",
+        the_rescheduling.is_valid(starting_solution_3),
+        "cost:",
+        [starting_solution_3.z_d, starting_solution_3.z_p, starting_solution_3.z_o],
     )
 
     # Fourth initial solution: keep order at disruption for eligible trains
@@ -234,6 +247,12 @@ def run_rescheduling_heuristic(
     starting_solution_4 = generate_starting_solution(
         EAG, ordered_trains, x, y, section_track_change=0, station_track_change=0
     )
+    print(
+        "Is the fourth initial solution valid?",
+        the_rescheduling.is_valid(starting_solution_4),
+        "cost:",
+        [starting_solution_4.z_d, starting_solution_4.z_p, starting_solution_4.z_o],
+    )
 
     # Fifth initial solution: regret ordering for eligible trains
     def t_through_disrupted_sections_period(t: Train):
@@ -260,7 +279,14 @@ def run_rescheduling_heuristic(
     starting_solution_5 = generate_starting_solution(
         EAG, ordered_trains_5, x, y, section_track_change=0, station_track_change=0
     )
+    print(
+        "Is the fifth initial solution valid?",
+        the_rescheduling.is_valid(starting_solution_5),
+        "cost:",
+        [starting_solution_5.z_d, starting_solution_5.z_p, starting_solution_5.z_o],
+    )
 
+    """
     # Pareto optimization
     the_pareto = ParetoClass(max_neighborhood=int(len(EAG.trains)), pareto_file=FILE_NAME)
     the_pareto = alns(
@@ -282,3 +308,4 @@ def run_rescheduling_heuristic(
 
     if write_back_viriato:
         write_back_to_viriato(EAG, api_url, the_pareto.pareto, None, None, None)
+    """
